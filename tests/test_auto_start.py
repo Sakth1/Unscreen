@@ -7,6 +7,7 @@ import pytest
 def mock_winreg():
     with patch("core.auto_start.winreg") as mock:
         mock.HKEY_CURRENT_USER = "HKCU"
+        mock.HKEY_LOCAL_MACHINE = "HKLM"
         mock.KEY_SET_VALUE = 0x0002
         mock.KEY_QUERY_VALUE = 0x0001
         mock.REG_SZ = 1
@@ -46,19 +47,19 @@ def test_enable_returns_false_when_target_none(mock_winreg):
     mock_winreg.OpenKey.assert_not_called()
 
 
-def test_disable_deletes_value(mock_winreg):
+def test_disable_deletes_value_from_both_hives(mock_winreg):
     from core.auto_start import disable
 
     result = disable()
 
     assert result is True
-    mock_winreg.OpenKey.assert_called_once()
-    mock_winreg.DeleteValue.assert_called_once_with(
-        mock_winreg.OpenKey.return_value, "Unscreen"
-    )
+    assert mock_winreg.OpenKey.call_count == 2
+    assert mock_winreg.DeleteValue.call_count == 2
+    hives = [call.args[0] for call in mock_winreg.OpenKey.call_args_list]
+    assert hives == ["HKCU", "HKLM"]
 
 
-def test_disable_succeeds_when_key_absent(mock_winreg):
+def test_disable_succeeds_when_keys_absent(mock_winreg):
     from core.auto_start import disable
 
     mock_winreg.OpenKey.side_effect = FileNotFoundError
@@ -79,21 +80,32 @@ def test_disable_returns_false_on_other_error(mock_winreg):
     assert result is False
 
 
-def test_is_enabled_queries_value(mock_winreg):
+def test_is_enabled_queries_hkcu_first(mock_winreg):
     from core.auto_start import is_enabled
 
     result = is_enabled()
 
     assert result is True
-    mock_winreg.OpenKey.assert_called_once_with(
-        "HKCU",
-        r"Software\Microsoft\Windows\CurrentVersion\Run",
-        0,
-        0x0001,
-    )
+    assert mock_winreg.OpenKey.call_count == 1
+    assert mock_winreg.OpenKey.call_args.args[0] == "HKCU"
     mock_winreg.QueryValueEx.assert_called_once_with(
         mock_winreg.OpenKey.return_value, "Unscreen"
     )
+
+
+def test_is_enabled_falls_back_to_hklm(mock_winreg):
+    from core.auto_start import is_enabled
+
+    mock_winreg.OpenKey.side_effect = [
+        FileNotFoundError,
+        mock_winreg.OpenKey.return_value,
+    ]
+
+    result = is_enabled()
+
+    assert result is True
+    assert mock_winreg.OpenKey.call_count == 2
+    assert mock_winreg.OpenKey.call_args.args[0] == "HKLM"
 
 
 def test_is_enabled_returns_false_when_missing(mock_winreg):
@@ -104,6 +116,7 @@ def test_is_enabled_returns_false_when_missing(mock_winreg):
     result = is_enabled()
 
     assert result is False
+    assert mock_winreg.OpenKey.call_count == 2
 
 
 def test_is_enabled_returns_false_on_error(mock_winreg):
