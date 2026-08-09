@@ -249,7 +249,9 @@ class UpdateChecker:
             and parse_version(release["tag_name"]) is not None
         ]
         if not include_pre:
-            candidates = [release for release in candidates if not release.get("prerelease")]
+            candidates = [
+                release for release in candidates if not release.get("prerelease")
+            ]
         if not candidates:
             logger.info(
                 "No release matches the update channel (current %s)",
