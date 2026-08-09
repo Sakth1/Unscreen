@@ -234,7 +234,10 @@ class App:
     async def _startup_update_check(self) -> None:
         """Silently look for a newer release; offer the update when found."""
         try:
-            info = await asyncio.to_thread(UpdateChecker().check_for_update)
+            info = await asyncio.to_thread(
+                UpdateChecker().check_for_update,
+                include_prereleases=self.config.check_prereleases,
+            )
         except Exception:
             logger.exception("Startup update check failed")
             return

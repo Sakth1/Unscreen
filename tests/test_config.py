@@ -91,6 +91,7 @@ class TestConfigDefaults:
         assert cm.watchers_enabled == ["foreground", "afk"]
         assert cm.log_level == "INFO"
         assert cm.get_interval("foreground", 30.0) == 30.0
+        assert cm.check_prereleases is False
 
     def test_uses_defaults_when_file_missing(self):
         from core.config_manager import ConfigManager
@@ -253,6 +254,19 @@ class TestConfigProperties:
         cm.start_maximized = False
         assert cm.auto_update_enabled is False
         assert cm.start_maximized is False
+
+    def test_check_prereleases_persists(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        p = tmp_path / "config.json"
+        cm = ConfigManager(path=str(p))
+        assert cm.check_prereleases is False
+        cm.check_prereleases = True
+        cm.save()
+
+        cm2 = ConfigManager(path=str(p))
+        cm2.load()
+        assert cm2.check_prereleases is True
 
     def test_afk_thresholds_defaults_and_clamping(self, tmp_path):
         from core.config_manager import ConfigManager

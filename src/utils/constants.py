@@ -63,6 +63,9 @@ EXTENDED_RAIL_MAX_WIDTH = 200
 #: GitHub API endpoint returning the latest release of the app repository.
 LATEST_RELEASE_REPO_URL = "https://api.github.com/repos/sakth1/Unscreen/releases/latest"
 
+#: GitHub API endpoint listing releases (stable and prereleases, newest first).
+RELEASES_REPO_URL = "https://api.github.com/repos/sakth1/Unscreen/releases?per_page=100"
+
 #: Human-readable releases page, used as the manual-update fallback.
 RELEASES_PAGE_URL = "https://github.com/sakth1/Unscreen/releases/latest"
 

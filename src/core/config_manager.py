@@ -19,6 +19,7 @@ DEFAULT_CONFIG = {
     "auto_start_enabled": False,
     "theme_mode": "system",
     "auto_update_enabled": True,
+    "check_prereleases": False,
     "start_maximized": True,
     "afk_idle_threshold_s": 60.0,
     "afk_away_threshold_s": 300.0,
@@ -169,6 +170,14 @@ class ConfigManager:
     @auto_update_enabled.setter
     def auto_update_enabled(self, value: bool) -> None:
         self._data["auto_update_enabled"] = value
+
+    @property
+    def check_prereleases(self) -> bool:
+        return self._data.get("check_prereleases", False)
+
+    @check_prereleases.setter
+    def check_prereleases(self, value: bool) -> None:
+        self._data["check_prereleases"] = value
 
     @property
     def start_maximized(self) -> bool:

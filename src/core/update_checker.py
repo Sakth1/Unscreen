@@ -8,13 +8,19 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from enum import Enum
+from functools import cmp_to_key
 from pathlib import Path
 from typing import Callable, Sequence
 
-from utils.constants import LATEST_RELEASE_REPO_URL, RELEASES_PAGE_URL
+from utils.constants import RELEASES_PAGE_URL, RELEASES_REPO_URL
 from utils.files import remove_file
 from utils.platform import is_packaged
-from utils.versions import compare_versions, get_current_version, normalize_version
+from utils.versions import (
+    compare_versions,
+    get_current_version,
+    normalize_version,
+    parse_version,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -201,27 +207,75 @@ class UpdateChecker:
     def __init__(
         self,
         current_version: str | None = None,
-        api_url: str = LATEST_RELEASE_REPO_URL,
+        api_url: str = RELEASES_REPO_URL,
+        include_prereleases: bool = False,
         timeout: float = 10,
     ):
         self._current_version = normalize_version(
             current_version or get_current_version()
         )
         self._api_url = api_url
+        self._include_prereleases = include_prereleases
         self._timeout = timeout
 
     @property
     def current_version(self) -> str:
         return self._current_version
 
-    def check_for_update(self) -> UpdateInfo | None:
-        """Query the latest release and return it when it is newer than local.
+    def check_for_update(
+        self, include_prereleases: bool | None = None
+    ) -> UpdateInfo | None:
+        """Query released versions and return the newest one that beats local.
 
         Returns ``None`` when the app is up to date or the repository has no
-        releases yet. Raises :class:`UpdateCheckError` on network/API failure.
+        releases yet. ``include_prereleases=True`` (or the constructor flag)
+        also considers dev/alpha/beta releases; otherwise only stable ones
+        are candidates. Raises :class:`UpdateCheckError` on network/API
+        failure.
         """
+        include_pre = (
+            self._include_prereleases
+            if include_prereleases is None
+            else include_prereleases
+        )
+        releases = self._fetch_releases()
+        if not releases:
+            return None
+        candidates = [
+            release
+            for release in releases
+            if release.get("tag_name")
+            and not release.get("draft")
+            and parse_version(release["tag_name"]) is not None
+        ]
+        if not include_pre:
+            candidates = [release for release in candidates if not release.get("prerelease")]
+        if not candidates:
+            logger.info(
+                "No release matches the update channel (current %s)",
+                self._current_version,
+            )
+            return None
+        release = max(
+            candidates,
+            key=cmp_to_key(
+                lambda left, right: compare_versions(
+                    left.get("tag_name", ""), right.get("tag_name", "")
+                )
+            ),
+        )
+
+        update = self._build_update_info(release)
+        if compare_versions(update.version, self._current_version) <= 0:
+            logger.info("No update available (current %s)", self._current_version)
+            return None
+        logger.info("Update available: %s -> %s", self._current_version, update.version)
+        return update
+
+    def _fetch_releases(self) -> list[dict] | None:
+        """Fetch the release list; ``None`` when the repository has no releases."""
         try:
-            release = _api_request(self._api_url, self._timeout)
+            payload = _api_request(self._api_url, self._timeout)
         except urllib.error.HTTPError as error:
             if error.code == 404:
                 logger.warning("No releases found at %s", self._api_url)
@@ -231,13 +285,9 @@ class UpdateChecker:
             raise UpdateCheckError(f"Could not reach GitHub API: {error}") from error
         except json.JSONDecodeError as error:
             raise UpdateCheckError("GitHub API returned invalid JSON") from error
-
-        update = self._build_update_info(release)
-        if compare_versions(update.version, self._current_version) <= 0:
-            logger.info("No update available (current %s)", self._current_version)
-            return None
-        logger.info("Update available: %s -> %s", self._current_version, update.version)
-        return update
+        if not isinstance(payload, list):
+            payload = [payload]
+        return payload
 
     def _build_update_info(self, release: dict) -> UpdateInfo:
         tag = release.get("tag_name", "")
