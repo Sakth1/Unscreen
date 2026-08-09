@@ -138,6 +138,8 @@ class General(ft.Container):
                     ft.Row(
                         controls=[ft.Text("Theme mode"), self._theme_btn],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
+                        run_spacing=8,
                     ),
                     self._maximized_switch,
                 ],
@@ -183,7 +185,13 @@ class General(ft.Container):
             )
             self._watcher_fields[name] = field
             self._watcher_toggles[name] = toggle
-            rows.append(ft.Row(controls=[toggle, ft.Container(expand=True), field]))
+            rows.append(
+                ft.Row(
+                    controls=[toggle, ft.Container(expand=True), field],
+                    wrap=True,
+                    run_spacing=8,
+                )
+            )
         return rows
 
     # ── Handlers ──────────────────────────────────────────────────────────

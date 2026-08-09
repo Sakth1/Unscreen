@@ -23,6 +23,16 @@ def _config(tmp_path) -> ConfigManager:
     return ConfigManager(path=str(tmp_path / "config.json"))
 
 
+def _walk(control):
+    """Yield a control and all its descendants (controls + Container.content)."""
+    yield control
+    for child in getattr(control, "controls", []) or []:
+        yield from _walk(child)
+    content = getattr(control, "content", None)
+    if isinstance(content, ft.Control):
+        yield from _walk(content)
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  AFK watcher — config-driven thresholds
 #  ═══════════════════════════════════════════════════════════════════
@@ -158,6 +168,32 @@ class TestGeneralSection:
         event = types.SimpleNamespace(control=_FakeSwitch("abc"))
         section._on_interval_submitted(event, "foreground")
         assert section._config.get_interval("foreground", 2.0) == 2.0
+
+    def test_theme_row_wraps_on_narrow_widths(self, tmp_path):
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        wrappers = [
+            c for c in _walk(section.content) if isinstance(c, ft.Row) and c.wrap
+        ]
+        assert wrappers, "no wrapping rows in the General section"
+        rows_with_theme = [
+            c for c in wrappers if section._theme_btn in (c.controls or [])
+        ]
+        assert rows_with_theme, "theme segmented button is not in a wrapping row"
+
+    def test_watcher_rows_wrap_on_narrow_widths(self, tmp_path):
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        wrappers = {
+            id(c): c for c in _walk(section.content) if isinstance(c, ft.Row) and c.wrap
+        }
+        captured = [c for c in wrappers.values() if (c.controls or [])]
+        for toggle in section._watcher_toggles.values():
+            assert any(
+                toggle in (row.controls or []) for row in captured
+            ), "watcher toggle is not in a wrapping row"
 
     def test_theme_change_writes_config(self, tmp_path):
         from UI.screens.settings.general import General
@@ -313,6 +349,17 @@ class TestDataDiagnosticsSection:
         section._export_csv(None)
         assert list(tmp_path.iterdir()) == []
 
+    def test_export_buttons_row_wraps_on_narrow_widths(self, tmp_path):
+        from UI.screens.settings.data import DataDiagnostics
+
+        section = DataDiagnostics(config=_config(tmp_path))
+        rows = [
+            c for c in _walk(section.content) if isinstance(c, ft.Row) and c.wrap
+        ]
+        assert any(
+            section._export_csv_btn in (row.controls or []) for row in rows
+        ), "export buttons are not in a wrapping row"
+
     def test_clear_logs_calls_cleanup(self, tmp_path, monkeypatch):
         from UI.screens.settings.data import DataDiagnostics
 
@@ -347,6 +394,17 @@ class TestAppInfoSection:
         section = AppInfo(config=_config(tmp_path))
         section._on_auto_update_changed(_event(False))
         assert section._config.auto_update_enabled is False
+
+    def test_update_buttons_row_wraps_on_narrow_widths(self, tmp_path):
+        from UI.screens.settings.app_info import AppInfo
+
+        section = AppInfo(config=_config(tmp_path))
+        rows = [
+            c for c in _walk(section.content) if isinstance(c, ft.Row) and c.wrap
+        ]
+        assert any(
+            section._check_btn in (row.controls or []) for row in rows
+        ), "update buttons are not in a wrapping row"
 
     def test_check_for_updates_noop_without_page(self, tmp_path):
         from UI.screens.settings.app_info import AppInfo

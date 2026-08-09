@@ -280,7 +280,11 @@ class AppInfo(ft.Container):
                 [
                     ft.Text(f"Installed version: {self._version}"),
                     self._auto_update_switch,
-                    ft.Row(controls=[self._check_btn, self._open_releases_btn]),
+                    ft.Row(
+                        controls=[self._check_btn, self._open_releases_btn],
+                        wrap=True,
+                        run_spacing=8,
+                    ),
                 ],
             ),
             SettingsCard(

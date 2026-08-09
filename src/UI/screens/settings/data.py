@@ -100,7 +100,11 @@ class DataDiagnostics(ft.Container):
                 "Export",
                 [
                     ft.Text("Download all collected raw events to a file."),
-                    ft.Row(controls=[self._export_csv_btn, self._export_json_btn]),
+                    ft.Row(
+                        controls=[self._export_csv_btn, self._export_json_btn],
+                        wrap=True,
+                        run_spacing=8,
+                    ),
                 ],
             ),
             SettingsCard(
