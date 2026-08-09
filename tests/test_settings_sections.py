@@ -169,6 +169,22 @@ class TestGeneralSection:
         section._on_interval_submitted(event, "foreground")
         assert section._config.get_interval("foreground", 2.0) == 2.0
 
+    def test_wrapping_rows_never_contain_expand_children(self, tmp_path):
+        from UI.screens.settings.app_info import AppInfo
+        from UI.screens.settings.data import DataDiagnostics
+        from UI.screens.settings.general import General
+
+        for section in (
+            General(config=_config(tmp_path)),
+            DataDiagnostics(config=_config(tmp_path)),
+            AppInfo(config=_config(tmp_path)),
+        ):
+            for control in _walk(section.content):
+                if isinstance(control, ft.Row) and control.wrap:
+                    assert not any(
+                        getattr(child, "expand", False) for child in control.controls
+                    ), "wrapped Row must not contain expand children"
+
     def test_theme_row_wraps_on_narrow_widths(self, tmp_path):
         from UI.screens.settings.general import General
 
@@ -426,8 +442,35 @@ class TestAppInfoSection:
 
         section = AppInfo(config=_config(tmp_path))
         asyncio.run(section._run_update_check())
-        assert checker.check_for_update.called
+        checker.check_for_update.assert_called_once_with(include_prereleases=False)
         assert section._checking is False
+
+    def test_run_update_check_passes_prerelease_flag(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from UI.screens.settings.app_info import AppInfo
+
+        config = _config(tmp_path)
+        config.check_prereleases = True
+        checker = MagicMock()
+        checker.check_for_update.return_value = None
+        monkeypatch.setattr(
+            "UI.screens.settings.app_info.UpdateChecker", lambda: checker
+        )
+
+        section = AppInfo(config=config)
+        asyncio.run(section._run_update_check())
+        checker.check_for_update.assert_called_once_with(include_prereleases=True)
+
+    def test_prerelease_switch_writes_config(self, tmp_path):
+        from UI.screens.settings.app_info import AppInfo
+
+        section = AppInfo(config=_config(tmp_path))
+        section._on_prerelease_changed(_event(True))
+        assert section._config.check_prereleases is True
+        assert (tmp_path / "config.json").exists()
+        section._on_prerelease_changed(_event(False))
+        assert section._config.check_prereleases is False
 
 
 class TestSettingsScreen:

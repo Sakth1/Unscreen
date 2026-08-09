@@ -185,9 +185,12 @@ class General(ft.Container):
             )
             self._watcher_fields[name] = field
             self._watcher_toggles[name] = toggle
+            # Wrapped rows cannot contain expand children (Flutter wraps
+            # reject flex children); SPACE_BETWEEN does the right-edge push.
             rows.append(
                 ft.Row(
-                    controls=[toggle, ft.Container(expand=True), field],
+                    controls=[toggle, field],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     wrap=True,
                     run_spacing=8,
                 )
