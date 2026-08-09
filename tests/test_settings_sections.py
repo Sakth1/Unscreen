@@ -291,6 +291,40 @@ class TestGeneralSection:
         section._on_watcher_toggled(_event(True), "power")
         page.run_task.assert_not_called()
 
+    def test_cards_stretch_across_full_width(self, tmp_path):
+        from UI.screens.settings.app_info import AppInfo
+        from UI.screens.settings.data import DataDiagnostics
+        from UI.screens.settings.general import General
+
+        for section in (
+            General(config=_config(tmp_path)),
+            DataDiagnostics(config=_config(tmp_path)),
+            AppInfo(config=_config(tmp_path)),
+        ):
+            scaffold = section.content
+            assert isinstance(scaffold, ft.Column)
+            assert (
+                scaffold.horizontal_alignment
+                == ft.CrossAxisAlignment.STRETCH
+            ), "scaffold must stretch its children across the full width"
+            cards_column = scaffold.controls[1]
+            assert (
+                cards_column.horizontal_alignment
+                == ft.CrossAxisAlignment.STRETCH
+            ), "cards column must stretch cards across the full width"
+            assert cards_column.controls, "no cards in the section"
+            for card in cards_column.controls:
+                assert isinstance(card, ft.Card), "card stack must contain cards"
+                inner = next(
+                    c
+                    for c in _walk(card)
+                    if isinstance(c, ft.Column) and c.spacing == 8
+                )
+                assert (
+                    inner.horizontal_alignment
+                    == ft.CrossAxisAlignment.STRETCH
+                ), "card content must span the card width"
+
     def test_on_sub_route_refreshes_values(self, tmp_path):
         from UI.screens.settings.general import General
 
