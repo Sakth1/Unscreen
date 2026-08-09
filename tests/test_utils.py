@@ -83,3 +83,35 @@ class TestFiles:
     def test_timestamped_filename(self):
         name = timestamped_filename("raw_events", "csv")
         assert re.fullmatch(r"raw_events_\d{8}_\d{6}\.csv", name)
+
+
+class TestInstanceMutex:
+    def test_not_available_off_windows(self):
+        from unittest.mock import patch
+
+        from utils.platform import acquire_instance_mutex
+
+        with patch("utils.platform.sys.platform", "linux"):
+            assert acquire_instance_mutex("AnyName") is None
+
+    def test_acquire_returns_handle_on_windows(self):
+        import ctypes
+        import sys
+
+        import pytest
+
+        if sys.platform != "win32":
+            pytest.skip("Windows named mutex is not available here")
+
+        from utils.platform import acquire_instance_mutex
+
+        first = acquire_instance_mutex("UnscreenTestMutex_1")
+        second = acquire_instance_mutex("UnscreenTestMutex_1")
+        try:
+            assert first
+            assert second
+        finally:
+            if first:
+                ctypes.windll.kernel32.CloseHandle(first)
+            if second:
+                ctypes.windll.kernel32.CloseHandle(second)

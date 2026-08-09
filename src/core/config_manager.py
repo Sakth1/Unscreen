@@ -1,6 +1,8 @@
 import json
 import logging
 import os
+import sys
+from configparser import ConfigParser
 from copy import deepcopy
 from pathlib import Path
 
@@ -23,9 +25,26 @@ DEFAULT_CONFIG = {
 }
 
 
+def _default_flags_path() -> Path | None:
+    """Return the bundled ``setup-flags.ini`` path, if running packaged.
+
+    The Inno installer writes this file into the app directory so its
+    installation-time choices (auto-update check, start with Windows) can be
+    folded into the config on the very first boot.
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent / "setup-flags.ini"
+    return None
+
+
 class ConfigManager:
-    def __init__(self, path: str | Path | None = None):
+    def __init__(
+        self,
+        path: str | Path | None = None,
+        flags_path: str | Path | None = None,
+    ):
         self._path = Path(path or os.path.join(get_data_dir(), "config.json"))
+        self._flags_path = Path(flags_path) if flags_path else _default_flags_path()
         self._data: dict = deepcopy(DEFAULT_CONFIG)
 
     def load(self) -> None:
@@ -41,6 +60,40 @@ class ConfigManager:
         else:
             logger.info("No config file at %s, using defaults", self._path)
             self._data = deepcopy(DEFAULT_CONFIG)
+            self._apply_installer_flags()
+
+    def _apply_installer_flags(self) -> None:
+        """Seed first-run config values from the installer's setup-flags.ini.
+
+        Only consulted when no config file exists yet, so choices made in the
+        wizard (check for updates, start with Windows) survive into the app,
+        while any later user change keeps winning.
+        """
+        if self._flags_path is None or not self._flags_path.exists():
+            return
+        try:
+            parser = ConfigParser()
+            parser.read(self._flags_path, encoding="utf-8")
+            if not parser.has_section("Setup"):
+                return
+
+            def _read_bool(key: str) -> bool | None:
+                raw = parser.get("Setup", key, fallback=None)
+                if raw is None:
+                    return None
+                return raw.strip().lower() in ("1", "true", "yes")
+
+            auto_update = _read_bool("AutoUpdate")
+            if auto_update is not None:
+                self.auto_update_enabled = auto_update
+            auto_start = _read_bool("AutoStart")
+            if auto_start is not None:
+                self.auto_start_enabled = auto_start
+            logger.info("Applied installer setup flags from %s", self._flags_path)
+        except Exception:
+            logger.exception(
+                "Failed to apply installer setup flags from %s", self._flags_path
+            )
 
     def save(self) -> None:
         try:

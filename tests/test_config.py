@@ -1,4 +1,85 @@
 import json
+from pathlib import Path
+from unittest.mock import patch
+
+
+class TestInstallerFlagsSeeding:
+    def _write_flags(self, tmp_path, auto_update="0", auto_start="1"):
+        flags = tmp_path / "setup-flags.ini"
+        flags.write_text(
+            f"[Setup]\nAutoUpdate={auto_update}\nAutoStart={auto_start}\n",
+            encoding="utf-8",
+        )
+        return flags
+
+    def test_applies_flags_when_no_config_file(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        flags = self._write_flags(tmp_path, auto_update="0", auto_start="1")
+        cm = ConfigManager(path=str(tmp_path / "config.json"), flags_path=str(flags))
+        cm.load()
+        assert cm.auto_update_enabled is False
+        assert cm.auto_start_enabled is True
+
+    def test_ignores_flags_when_config_file_exists(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        flags = self._write_flags(tmp_path, auto_update="0")
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"auto_update_enabled": True}), encoding="utf-8")
+        cm = ConfigManager(path=str(p), flags_path=str(flags))
+        cm.load()
+        assert cm.auto_update_enabled is True
+
+    def test_flags_only_on_first_load(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        flags = self._write_flags(tmp_path, auto_update="0")
+        p = tmp_path / "config.json"
+        cm = ConfigManager(path=str(p), flags_path=str(flags))
+        cm.load()
+        assert cm.auto_update_enabled is False
+        cm.save()
+
+        cm2 = ConfigManager(path=str(p), flags_path=str(flags))
+        cm2.load()
+        assert cm2.auto_update_enabled is False
+
+    def test_missing_flags_file_uses_defaults(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        cm = ConfigManager(
+            path=str(tmp_path / "config.json"),
+            flags_path=str(tmp_path / "does-not-exist.ini"),
+        )
+        cm.load()
+        assert cm.auto_update_enabled is True
+        assert cm.auto_start_enabled is False
+
+    def test_malformed_flags_file_uses_defaults(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        flags = tmp_path / "setup-flags.ini"
+        flags.write_text("this is [[[ not ini", encoding="utf-8")
+        cm = ConfigManager(path=str(tmp_path / "config.json"), flags_path=str(flags))
+        cm.load()
+        assert cm.auto_update_enabled is True
+
+    def test_frozen_default_flags_path_next_to_exe(self):
+        from core.config_manager import _default_flags_path
+
+        with (
+            patch("core.config_manager.sys.frozen", True, create=True),
+            patch("core.config_manager.sys.executable", "C:\\Programs\\app.exe"),
+        ):
+            result = _default_flags_path()
+        assert result == Path("C:\\Programs\\setup-flags.ini")
+
+    def test_dev_default_flags_path_is_none(self):
+        from core.config_manager import _default_flags_path
+
+        with patch("core.config_manager.sys.frozen", False, create=True):
+            assert _default_flags_path() is None
 
 
 class TestConfigDefaults:

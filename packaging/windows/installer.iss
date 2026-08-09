@@ -1,19 +1,23 @@
-; Unscreen installer — Inno Setup script.
+; Unscreen installer - Inno Setup script.
 ;
 ; Compile (from the repository root):
 ;   "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" ^
-;     /DMyAppVersion=0.4.3 /DMyAppExeName=unscreen.exe /DBundleDir=build\bundle ^
+;     /DMyAppVersion=0.5.0 /DMyAppExeName=unscreen.exe /DBundleDir=build\bundle ^
 ;     packaging\windows\installer.iss
 ;
-; The installer distinguishes four flows based on what it finds in the
-; registry before anything is copied:
-;   * install    - no previous Unscreen installation -> fresh install
-;   * upgrade    - an older version is installed      -> silently uninstall
-;                  it just before copying files (user data in %APPDATA%
-;                  is untouched), then install the new version
-;   * repair     - the same version is installed      -> ask, then overwrite
-;   * downgrade  - a newer version is installed       -> abort with a hint
-;                  to uninstall first
+; Flows, decided in InitializeSetup from the registry state:
+;   * install    - nothing found               -> full wizard
+;   * upgrade    - older version installed     -> silent uninstall before
+;                  copying (user data in %APPDATA% is untouched), minimal
+;                  wizard with "updated from" wording
+;   * repair     - same version installed      -> maintenance page offering
+;                                                 Modify / Repair / Remove
+;   * downgrade  - newer version installed      -> abort with a hint
+;   * maintenance - started with /maintenance  -> maintenance page (wired up
+;                                                 from Programs & Features)
+;
+; Programs & Features: a copy of this installer is placed in {app} and wired
+; via AppModifyPath, so the "Change" button opens the maintenance page.
 
 #define MyAppName "Unscreen"
 #define MyAppId "D2E3F4A5-B6C7-48D9-A0B1-C2D3E4F5A6B7"
@@ -32,6 +36,7 @@
 #ifndef MyAppComments
   #define MyAppComments "Cross-device app usage timeline tracker"
 #endif
+#define MyAppReleaseUrl "https://github.com/sakth1/Unscreen/releases/latest"
 
 [Setup]
 ; IMPORTANT: AppId must never change, it is what lets the installer detect
@@ -42,6 +47,8 @@ AppVersion={#MyAppVersion}
 AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
 AppComments={#MyAppComments}
+AppSupportURL={#MyAppReleaseUrl}
+AppUpdatesURL={#MyAppReleaseUrl}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 OutputBaseFilename={#MyAppName}-{#MyAppVersion}-setup
@@ -49,10 +56,20 @@ Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
 WizardResizable=yes
+WizardImageFile=assets\wizard-welcome.bmp
+WizardSmallImageFile=assets\wizard-small.bmp
 SetupLogging=yes
 CloseApplications=yes
 RestartApplications=no
-UninstallDisplayName={#MyAppName}
+; The app holds the named mutex "Unscreen_Mutex" while running; setup will
+; wait for/close it instead of failing when the app is open during an update.
+AppMutex=Unscreen_Mutex
+; Offers "Install for anyone who uses this computer / Only for me".
+PrivilegesRequiredOverridesAllowed=dialog
+; Lets the Settings app (Programs and Features / 8.3) show a working Modify
+; button that starts the maintenance page.
+AppModifyPath={app}\Unscreen-Setup.exe /maintenance
+UninstallDisplayName={#MyAppName} {#MyAppVersion}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=..\..\src\assets\icon_windows.ico
 VersionInfoVersion={#MyAppVersion}
@@ -69,7 +86,9 @@ EnableDirDoesntExistWarning=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "startup"; Description: "Run Unscreen when Windows starts"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "autoupdate"; Description: "Check for updates automatically"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
 Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -78,17 +97,38 @@ Source: "{#BundleDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
-[Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; Files produced at install time that the uninstaller does not know about.
+[UninstallDelete]
+Type: files; Name: "{app}\setup-flags.ini"
+Type: files; Name: "{app}\Unscreen-Setup.exe"
+Type: dirifempty; Name: "{app}"
+
+[Registry]
+; Run Unscreen when Windows starts - the right hive depends on install scope.
+Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Unscreen"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup; Check: IsAdminInstallMode
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Unscreen"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup; Check: not IsAdminInstallMode
+
+; First-run seeding: the app folds these into its config on very first boot
+; (only when no config exists yet), so the installer's choices stick.
+[INI]
+Filename: "{app}\setup-flags.ini"; Section: "Setup"; Key: "AutoUpdate"; String: "1"; Tasks: autoupdate
+Filename: "{app}\setup-flags.ini"; Section: "Setup"; Key: "AutoUpdate"; String: "0"; Tasks: not autoupdate
+Filename: "{app}\setup-flags.ini"; Section: "Setup"; Key: "AutoStart"; String: "1"; Tasks: startup
+Filename: "{app}\setup-flags.ini"; Section: "Setup"; Key: "AutoStart"; String: "0"; Tasks: not startup
 
 [Code]
-var
-  InstalledVersion: String;
-  UpgradeUninstallCmd: String;
-  AppMode: String;
-
 const
   UninstallKeyBase = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#MyAppId}_is1';
+
+var
+  InstalledVersion: String;
+  InstalledUninstallCmd: String;
+  InstalledDir: String;
+  AppMode: String;          // 'install' | 'upgrade' | 'repair' | 'maintenance' | 'downgrade'
+  MaintPage: TInputOptionWizardPage;
+  MaintChoice: Integer;     // 0 = Modify, 1 = Repair, 2 = Remove
+  KeepDataPage: TInputOptionWizardPage;
+  KeepData: Boolean;        // uninstaller: True -> do not touch %APPDATA%
 
 { Compare two dotted-decimal version strings. Returns -1/0/1. }
 function CompareVersions(Version1, Version2: String): Integer;
@@ -96,76 +136,67 @@ var
   Packed1: Int64;
   Packed2: Int64;
 begin
-  if not StrToVersion(Version1, Packed1) then
-    Packed1 := 0;
-  if not StrToVersion(Version2, Packed2) then
-    Packed2 := 0;
+  if not StrToVersion(Version1, Packed1) then Packed1 := 0;
+  if not StrToVersion(Version2, Packed2) then Packed2 := 0;
   Result := ComparePackedVersion(Packed1, Packed2);
 end;
 
-{ Read DisplayVersion/UninstallString from any registry view that has the
-  uninstall key (64-bit and 32-bit, HKLM and HKCU). }
-function GetInstalledInfo(out Version: String; out UninstallCmd: String): Boolean;
+{ Read version/uninstall-command/install-dir from whichever view of the
+  registry hosts the uninstall key (64-bit and 32-bit, HKLM and HKCU). }
+function GetInstalledInfo(out Version: String; out UninstallCmd: String;
+  out InstallDir: String): Boolean;
+var
+  Views: array of Cardinal;
+  I: Integer;
 begin
   Result := False;
   Version := '';
   UninstallCmd := '';
-
-  if RegKeyExists(HKLM64, UninstallKeyBase) then
+  InstallDir := '';
+  Views := [HKLM64, HKLM, HKCU64, HKCU];
+  for I := 0 to GetArrayLength(Views) - 1 do
   begin
-    RegQueryStringValue(HKLM64, UninstallKeyBase, 'DisplayVersion', Version);
-    RegQueryStringValue(HKLM64, UninstallKeyBase, 'UninstallString', UninstallCmd);
-    Result := True;
-  end
-  else if RegKeyExists(HKLM, UninstallKeyBase) then
-  begin
-    RegQueryStringValue(HKLM, UninstallKeyBase, 'DisplayVersion', Version);
-    RegQueryStringValue(HKLM, UninstallKeyBase, 'UninstallString', UninstallCmd);
-    Result := True;
-  end
-  else if RegKeyExists(HKCU64, UninstallKeyBase) then
-  begin
-    RegQueryStringValue(HKCU64, UninstallKeyBase, 'DisplayVersion', Version);
-    RegQueryStringValue(HKCU64, UninstallKeyBase, 'UninstallString', UninstallCmd);
-    Result := True;
-  end
-  else if RegKeyExists(HKCU, UninstallKeyBase) then
-  begin
-    RegQueryStringValue(HKCU, UninstallKeyBase, 'DisplayVersion', Version);
-    RegQueryStringValue(HKCU, UninstallKeyBase, 'UninstallString', UninstallCmd);
-    Result := True;
+    if RegKeyExists(Views[I], UninstallKeyBase) then
+    begin
+      RegQueryStringValue(Views[I], UninstallKeyBase, 'DisplayVersion', Version);
+      RegQueryStringValue(Views[I], UninstallKeyBase, 'UninstallString', UninstallCmd);
+      RegQueryStringValue(Views[I], UninstallKeyBase, 'InstallLocation', InstallDir);
+      Result := True;
+      Exit;
+    end;
   end;
 end;
 
-{ Decide the flow: install / upgrade / repair / abort-on-downgrade. }
+{ Decide the flow and block a downgrade. }
 function InitializeSetup(): Boolean;
 var
   UninstallCmd: String;
+  Dir: String;
   Compare: Integer;
 begin
   Result := True;
   AppMode := 'install';
-  UpgradeUninstallCmd := '';
+  InstalledVersion := '';
+  InstalledUninstallCmd := '';
+  InstalledDir := '';
+  MaintChoice := 0;
 
-  if GetInstalledInfo(InstalledVersion, UninstallCmd) and (InstalledVersion <> '') then
+  if (ParamStr(1) <> '') and (CompareText(ParamStr(1), '/MAINTENANCE') = 0) then
   begin
+    AppMode := 'maintenance';
+    Exit;
+  end;
+
+  if GetInstalledInfo(InstalledVersion, UninstallCmd, Dir) and
+     (InstalledVersion <> '') then
+  begin
+    InstalledUninstallCmd := UninstallCmd;
+    InstalledDir := Dir;
     Compare := CompareVersions(InstalledVersion, '{#MyAppVersion}');
     if Compare = 0 then
-    begin
-      AppMode := 'repair';
-      if MsgBox(
-        'Unscreen ' + InstalledVersion + ' is already installed on this computer.'#13#10#13#10 +
-        'Do you want to reinstall it now?',
-        mbConfirmation, MB_YESNO) = IDNO then
-      begin
-        Result := False;
-      end;
-    end
+      AppMode := 'repair'
     else if Compare < 0 then
-    begin
-      AppMode := 'upgrade';
-      UpgradeUninstallCmd := UninstallCmd;
-    end
+      AppMode := 'upgrade'
     else
     begin
       AppMode := 'downgrade';
@@ -179,45 +210,192 @@ begin
   end;
 end;
 
-{ Reword the welcome page so the user knows exactly what will happen. }
+{ Brand the wizard per mode + build the maintenance page. }
 procedure InitializeWizard();
 begin
   case AppMode of
     'upgrade':
       WizardForm.WelcomeLabel2.Caption :=
-        'Unscreen ' + InstalledVersion + ' is already installed on your computer.'#13#10#13#10 +
+        'Unscreen ' + InstalledVersion + ' is already installed on your computer.' + #13#10#13#10 +
         'This wizard will update it to {#MyAppVersion}. Your data is kept.';
-    'repair':
+    'repair', 'maintenance':
       WizardForm.WelcomeLabel2.Caption :=
-        'Unscreen {#MyAppVersion} is already installed on your computer.'#13#10#13#10 +
-        'This wizard will reinstall the current version. Your data is kept.';
+        'Unscreen {#MyAppVersion} is already installed on your computer.' + #13#10#13#10 +
+        'This wizard can modify, repair, or remove the installation.';
   else
     WizardForm.WelcomeLabel2.Caption :=
-      'This will install Unscreen {#MyAppVersion} on your computer.'#13#10#13#10 +
+      'This will install Unscreen {#MyAppVersion} on your computer.' + #13#10#13#10 +
       'It is recommended that you close all other applications before continuing.';
+  end;
+
+  if (AppMode = 'repair') or (AppMode = 'maintenance') then
+    MaintPage := CreateInputOptionPage(wpLicense,
+      'Modify, repair or remove Unscreen',
+      'What do you want to do?',
+      'Unscreen ' + InstalledVersion + ' is already installed. Choose how to continue.',
+      True, False)
+  else
+    MaintPage := nil;
+
+  if (AppMode = 'upgrade') and (InstalledDir <> '') then
+    WizardForm.DirEdit.Text := InstalledDir;
+end;
+
+{ Skip pages that do not apply to the flow. }
+function ShouldSkipPage(PageID: Integer): Boolean;
+begin
+  Result := False;
+
+  if PageID = wpLicense then
+    Result := (AppMode <> 'install');
+
+  if AppMode = 'upgrade' then
+  begin
+    if (PageID = wpSelectDir) or (PageID = wpSelectProgramGroup) or
+       (PageID = wpSelectTasks) then
+      Result := True;
+  end
+  else if (AppMode = 'repair') or (AppMode = 'maintenance') then
+  begin
+    if (MaintPage = nil) or (PageID = MaintPage.ID) then
+      Result := False
+    else if PageID = wpLicense then
+      Result := True
+    else if PageID = wpSelectDir then
+      Result := True
+    else if PageID = wpSelectProgramGroup then
+      Result := True
+    else if PageID = wpSelectTasks then
+      Result := (MaintChoice <> 0);
   end;
 end;
 
-// On upgrades, remove the previous installation right before copying files so
-// stale bundle files (Flutter assets, removed DLLs) cannot linger. The
-// uninstaller only removes the app directory and registry entries, so user
-// data in %APPDATA%\Unscreen survives.
-procedure CurStepChanged(CurStep: TSetupStep);
+{ Intercept the maintenance page: capture the choice; "Remove" hands over to
+  the uninstaller and abandons the wizard. }
+function NextButtonClick(CurPageID: Integer): Boolean;
 var
   ResultCode: Integer;
 begin
-  if (CurStep = ssInstall) and (AppMode = 'upgrade') and (UpgradeUninstallCmd <> '') then
+  Result := True;
+
+  if not ((AppMode = 'repair') or (AppMode = 'maintenance')) then
+    Exit;
+
+  if (MaintPage <> nil) and (CurPageID = MaintPage.ID) then
   begin
-    Log('Removing previous installation: ' + UpgradeUninstallCmd);
-    if not Exec(
-      RemoveQuotes(UpgradeUninstallCmd),
-      '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART',
-      '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    MaintChoice := MaintPage.SelectedValueIndex;
+    if MaintChoice = 2 then
     begin
-      MsgBox(
-        'Could not remove the previous installation of Unscreen.'#13#10#13#10 +
-        'Uninstall it manually, then run setup again.',
-        mbCriticalError, MB_OK);
+      // Remove: hand over to the uninstaller and abandon this wizard.
+      if InstalledUninstallCmd <> '' then
+      begin
+        MsgBox('Uninstalling Unscreen ' + InstalledVersion + '...', mbInformation, MB_OK);
+        Exec(RemoveQuotes(InstalledUninstallCmd), '', '', SW_SHOW,
+          ewWaitUntilTerminated, ResultCode);
+      end;
+      Result := False;
+      WizardForm.Close();
+    end;
+    // Modify (0) and Repair (1) fall through to the normal install steps;
+    // ShouldSkipPage decides which pages they see.
+  end;
+end;
+
+// On some systems the uninstall key written by Inno's internal registration is
+// not visible afterwards, which breaks "Modify" in Apps & Features, upgrade
+// detection and the uninstaller's own entry cleanup. ssPostInstall runs after
+// Inno's own registration, so re-register the entry deterministically there
+// (a no-op where Inno's write already landed).
+procedure EnsureUninstallKey;
+var
+  Root: Integer;
+begin
+  if IsAdminInstallMode then
+    Root := HKLM
+  else
+    Root := HKCU;
+
+  if RegKeyExists(Root, UninstallKeyBase) then
+    Exit;
+
+  Log('Uninstall key not found after install; registering it explicitly.');
+  RegWriteStringValue(Root, UninstallKeyBase, 'DisplayName',
+    '{#MyAppName} {#MyAppVersion}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'DisplayVersion', '{#MyAppVersion}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'DisplayIcon',
+    ExpandConstant('{app}\{#MyAppExeName}'));
+  RegWriteStringValue(Root, UninstallKeyBase, 'Publisher', '{#MyAppPublisher}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'URLInfoAbout', '{#MyAppReleaseUrl}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'HelpLink', '{#MyAppReleaseUrl}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'URLUpdateInfo', '{#MyAppReleaseUrl}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'Inno Setup: App Path',
+    ExpandConstant('{app}'));
+  RegWriteStringValue(Root, UninstallKeyBase, 'InstallLocation',
+    ExpandConstant('{app}\'));
+  RegWriteStringValue(Root, UninstallKeyBase, 'UninstallString',
+    '"' + ExpandConstant('{uninstallexe}') + '"');
+  RegWriteStringValue(Root, UninstallKeyBase, 'QuietUninstallString',
+    '"' + ExpandConstant('{uninstallexe}') + '" /SILENT');
+  RegWriteStringValue(Root, UninstallKeyBase, 'ModifyPath',
+    ExpandConstant('{app}\Unscreen-Setup.exe /maintenance'));
+  RegWriteDWordValue(Root, UninstallKeyBase, 'NoRepair', 1);
+  Log('Uninstall key registered explicitly at: ' + UninstallKeyBase);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    // Keep a copy of the installer in {app} so the Programs & Features
+    // "Modify" button (AppModifyPath) always finds the maintenance entry
+    // point, even without a network fetch.
+    FileCopy(ExpandConstant('{srcexe}'), ExpandConstant('{app}\Unscreen-Setup.exe'), False);
+    EnsureUninstallKey();
+  end;
+end;
+
+{ ------------ Uninstaller: ask whether usage data should stay ------------ }
+
+function InitializeUninstall(): Boolean;
+begin
+  Result := True;
+  if not UninstallSilent then
+  begin
+    KeepDataPage := CreateInputOptionPage(wpWelcome,
+      'Remove Unscreen data?',
+      'Keep your history?',
+      'Unscreen stores your usage history and settings in your user profile (AppData).',
+      True, False);
+    KeepDataPage.Add('Keep my history and settings');
+    KeepDataPage.Add('Remove everything, including my history and settings');
+    KeepDataPage.SelectedValueIndex := 0;
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  UninstallRoot: Integer;
+begin
+  if CurUninstallStep = usPostUninstall then
+  begin
+    if IsAdminInstallMode then
+      UninstallRoot := HKLM
+    else
+      UninstallRoot := HKCU;
+
+    // The entry may have been registered by the installer's own fallback
+    // (EnsureUninstallKey) and is not tracked by the uninstall log, so remove
+    // it here to leave no orphaned entry in Apps & Features.
+    if RegKeyExists(UninstallRoot, UninstallKeyBase) then
+    begin
+      Log('Removing explicitly registered uninstall key.');
+      RegDeleteKeyIncludingSubkeys(UninstallRoot, UninstallKeyBase);
+    end;
+
+    if (not UninstallSilent) and (KeepDataPage.SelectedValueIndex = 1) then
+    begin
+      if DirExists(ExpandConstant('{userappdata}\Unscreen')) then
+        DelTree(ExpandConstant('{userappdata}\Unscreen'), True, True, True);
     end;
   end;
 end;

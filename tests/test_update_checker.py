@@ -1,7 +1,6 @@
 import hashlib
 import importlib.metadata
 import json
-import subprocess
 import sys
 import types
 import urllib.error
@@ -321,24 +320,75 @@ def test_apply_refuses_in_dev_mode(tmp_path):
             checker.apply(_update(), installer)
 
 
-def test_apply_windows_launches_silent_installer(tmp_path):
+def test_apply_windows_launches_silent_installer_elevated(tmp_path):
     checker = UpdateChecker(current_version="0.4.2")
     installer = tmp_path / "setup.exe"
     installer.write_bytes(b"x")
     with (
         patch("core.update_checker.is_packaged", return_value=True),
         patch("core.update_checker.platform.system", return_value="Windows"),
-        patch("core.update_checker.subprocess.Popen") as popen,
+        patch("core.update_checker._launch_elevated", return_value=4242) as launch,
     ):
-        result = checker.apply(_update(), installer)
-    assert result == ApplyResult.APPLIED
-    popen.assert_called_once_with(
-        [str(installer), "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART"],
-        cwd=str(tmp_path),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        close_fds=True,
-    )
+        outcome = checker.apply(_update(), installer)
+    assert outcome.result == ApplyResult.APPLIED
+    assert outcome.process_id == 4242
+    command, args = launch.call_args.args
+    cwd = launch.call_args.kwargs["cwd"]
+    assert command == str(installer)
+    assert cwd == str(tmp_path)
+    assert "/VERYSILENT" in args
+    assert "/SUPPRESSMSGBOXES" in args
+    assert "/NORESTART" in args
+
+
+def test_apply_windows_forwards_extra_args(tmp_path):
+    checker = UpdateChecker(current_version="0.4.2")
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"x")
+    with (
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Windows"),
+        patch("core.update_checker._launch_elevated", return_value=7) as launch,
+    ):
+        outcome = checker.apply(
+            _update(),
+            installer,
+            extra_args=["/ALLUSERS", '/DIR="C:\\Program Files\\Unscreen"'],
+        )
+    assert outcome.result == ApplyResult.APPLIED
+    _, args = launch.call_args.args
+    assert "/ALLUSERS" in args
+    assert '/DIR="C:\\Program Files\\Unscreen"' in args
+
+
+def test_apply_windows_canceled_returns_canceled(tmp_path):
+    checker = UpdateChecker(current_version="0.4.2")
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"x")
+    with (
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Windows"),
+        patch("core.update_checker._launch_elevated", return_value=None),
+    ):
+        outcome = checker.apply(_update(), installer)
+    assert outcome.result == ApplyResult.CANCELED
+    assert outcome.process_id is None
+
+
+def test_apply_windows_bubbles_launch_failure(tmp_path):
+    checker = UpdateChecker(current_version="0.4.2")
+    installer = tmp_path / "setup.exe"
+    installer.write_bytes(b"x")
+    with (
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Windows"),
+        patch(
+            "core.update_checker._launch_elevated",
+            side_effect=ApplyError("Failed to launch setup.exe (error 5)"),
+        ),
+    ):
+        with pytest.raises(ApplyError, match="error 5"):
+            checker.apply(_update(), installer)
 
 
 def test_apply_windows_missing_installer_raises(tmp_path):
@@ -360,9 +410,8 @@ def test_apply_android_manual_without_jnius(tmp_path):
         patch("core.update_checker.platform.system", return_value="Android"),
         patch.dict(sys.modules, {"jnius": None}),
     ):
-        assert checker.apply(_update(asset_name="0.4.2.apk"), apk) == (
-            ApplyResult.MANUAL_REQUIRED
-        )
+        outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+    assert outcome.result == ApplyResult.MANUAL_REQUIRED
 
 
 def test_apply_android_triggers_install_intent(tmp_path):
@@ -384,9 +433,8 @@ def test_apply_android_triggers_install_intent(tmp_path):
         patch("core.update_checker.platform.system", return_value="Android"),
         patch.dict(sys.modules, {"jnius": jnius}),
     ):
-        assert (
-            checker.apply(_update(asset_name="0.4.2.apk"), apk) == ApplyResult.APPLIED
-        )
+        outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+    assert outcome.result == ApplyResult.APPLIED
     assert activity.mActivity.startActivity.called
 
 
@@ -398,4 +446,5 @@ def test_apply_unsupported_platform_is_not_applicable(tmp_path):
         patch("core.update_checker.is_packaged", return_value=True),
         patch("core.update_checker.platform.system", return_value="Linux"),
     ):
-        assert checker.apply(_update(), installer) == ApplyResult.NOT_APPLICABLE
+        outcome = checker.apply(_update(), installer)
+    assert outcome.result == ApplyResult.NOT_APPLICABLE

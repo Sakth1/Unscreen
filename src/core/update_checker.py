@@ -3,14 +3,13 @@ import json
 import logging
 import os
 import platform
-import subprocess
 import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 from utils.constants import LATEST_RELEASE_REPO_URL, RELEASES_PAGE_URL
 from utils.files import remove_file
@@ -42,8 +41,22 @@ class ApplyError(Exception):
 
 class ApplyResult(Enum):
     APPLIED = "applied"
+    CANCELED = "canceled"
     MANUAL_REQUIRED = "manual_required"
     NOT_APPLICABLE = "not_applicable"
+
+
+@dataclass(frozen=True)
+class ApplyOutcome:
+    """Result of :meth:`UpdateChecker.apply`.
+
+    ``process_id`` is set when an installer process actually started; the
+    caller can monitor it (e.g. from a relaunch watchdog) without holding
+    extra privileges.
+    """
+
+    result: ApplyResult
+    process_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +120,81 @@ def _api_request(url: str, timeout: float) -> dict:
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+# Error 1223 from ShellExecuteEx: the user declined the UAC consent prompt.
+_ERROR_CANCELLED = 1223
+
+_SEE_MASK_NOCLOSEPROCESS = 0x00000040
+_SW_SHOWNORMAL = 1
+
+
+def _launch_elevated(
+    executable: str, parameters: str = "", cwd: str = ""
+) -> int | None:
+    """Launch an admin-requiring program via ShellExecuteEx with ``runas``.
+
+    ``subprocess.Popen`` (CreateProcess) is not usable here: Inno's setup.exe
+    declares ``requireAdministrator`` in its manifest, and CreateProcess from
+    a non-elevated process fails with ERROR_ELEVATION_REQUIRED (740) instead
+    of showing the consent prompt. Returns the child PID, or ``None`` when the
+    user canceled the UAC prompt.
+    """
+    if platform.system() != "Windows":
+        raise ApplyError("Elevated launch is only implemented on Windows")
+    import ctypes
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cbSize", wintypes.DWORD),
+            ("fMask", wintypes.ULONG),
+            ("hwnd", wintypes.HWND),
+            ("lpVerb", wintypes.LPCWSTR),
+            ("lpFile", wintypes.LPCWSTR),
+            ("lpParameters", wintypes.LPCWSTR),
+            ("lpDirectory", wintypes.LPCWSTR),
+            ("nShow", ctypes.c_int),
+            ("hInstApp", wintypes.HINSTANCE),
+            ("lpIDList", wintypes.LPVOID),
+            ("lpClass", wintypes.LPCWSTR),
+            ("hkeyClass", wintypes.HKEY),
+            ("dwHotKey", wintypes.DWORD),
+            ("hIconOrMonitor", wintypes.HANDLE),
+            ("hProcess", wintypes.HANDLE),
+        ]
+
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(SHELLEXECUTEINFOW)
+    info.fMask = _SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb = "runas"
+    info.lpFile = executable
+    info.lpParameters = parameters or None
+    info.lpDirectory = cwd or None
+    info.nShow = _SW_SHOWNORMAL
+
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.ShellExecuteExW.argtypes = [ctypes.POINTER(SHELLEXECUTEINFOW)]
+    shell32.ShellExecuteExW.restype = wintypes.BOOL
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetProcessId.argtypes = [wintypes.HANDLE]
+    kernel32.GetProcessId.restype = wintypes.DWORD
+
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        error = ctypes.get_last_error()
+        if error == _ERROR_CANCELLED:
+            logger.info("UAC consent canceled for %s", executable)
+            return None
+        raise ApplyError(f"Failed to launch {executable} (error {error})")
+
+    try:
+        if info.hProcess:
+            pid = int(kernel32.GetProcessId(info.hProcess))
+            return pid
+        return None
+    finally:
+        if info.hProcess:
+            kernel32.CloseHandle(info.hProcess)
 
 
 class UpdateChecker:
@@ -236,13 +324,20 @@ class UpdateChecker:
         logger.info("sha256 verified for %s", path.name)
 
     def apply(
-        self, update: UpdateInfo, installer_path: str | os.PathLike
-    ) -> ApplyResult:
+        self,
+        update: UpdateInfo,
+        installer_path: str | os.PathLike,
+        extra_args: Sequence[str] | None = None,
+    ) -> ApplyOutcome:
         """Apply the downloaded update for the current platform.
 
-        Windows spawns the Inno Setup installer silently; the caller is
-        responsible for exiting the app afterwards. Android attempts an
-        ``ACTION_VIEW`` install intent and falls back to manual install.
+        Windows launches the Inno Setup installer via ``ShellExecuteExW`` with
+        the ``runas`` verb, so the standard UAC consent flow runs even though
+        the app itself is not elevated; ``/VERYSILENT`` plus ``extra_args``
+        (install dir / scope) are passed on the command line. The caller is
+        responsible for exiting the app afterwards (the installer waits on the
+        app mutex before replacing files). Android attempts an ``ACTION_VIEW``
+        install intent and falls back to manual install.
         """
         if not is_packaged():
             raise ApplyError(
@@ -250,35 +345,29 @@ class UpdateChecker:
             )
         system = platform.system()
         if system == "Windows":
-            return self._apply_windows(installer_path)
+            return self._apply_windows(installer_path, extra_args)
         if system == "Android":
             return self._apply_android(installer_path)
         logger.warning("No update apply path for platform %s", system)
-        return ApplyResult.NOT_APPLICABLE
+        return ApplyOutcome(ApplyResult.NOT_APPLICABLE)
 
-    def _apply_windows(self, installer_path: str | os.PathLike) -> ApplyResult:
+    def _apply_windows(
+        self, installer_path: str | os.PathLike, extra_args: Sequence[str] | None
+    ) -> ApplyOutcome:
         installer = Path(installer_path)
         if not installer.is_file():
             raise ApplyError(f"Installer not found: {installer}")
-        try:
-            subprocess.Popen(
-                [
-                    str(installer),
-                    "/VERYSILENT",
-                    "/SUPPRESSMSGBOXES",
-                    "/NORESTART",
-                ],
-                cwd=str(installer.parent),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                close_fds=True,
-            )
-        except OSError as error:
-            raise ApplyError(f"Failed to launch installer: {error}") from error
-        logger.info("Launched installer %s", installer)
-        return ApplyResult.APPLIED
+        args = " ".join(
+            ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", *(extra_args or [])]
+        )
+        process_id = _launch_elevated(str(installer), args, cwd=str(installer.parent))
+        if process_id is None:
+            logger.info("User canceled the installer consent prompt")
+            return ApplyOutcome(ApplyResult.CANCELED)
+        logger.info("Launched installer %s (pid %s)", installer, process_id)
+        return ApplyOutcome(ApplyResult.APPLIED, process_id=process_id)
 
-    def _apply_android(self, installer_path: str | os.PathLike) -> ApplyResult:
+    def _apply_android(self, installer_path: str | os.PathLike) -> ApplyOutcome:
         apk = Path(installer_path)
         if not apk.is_file():
             raise ApplyError(f"APK not found: {apk}")
@@ -286,7 +375,7 @@ class UpdateChecker:
             from jnius import autoclass  # type: ignore
         except ImportError:
             logger.warning("pyjnius not available; manual APK install required")
-            return ApplyResult.MANUAL_REQUIRED
+            return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
         try:
             Intent = autoclass("android.content.Intent")
             Uri = autoclass("android.net.Uri")
@@ -300,9 +389,9 @@ class UpdateChecker:
             PythonActivity.mActivity.startActivity(intent)
         except Exception:
             logger.exception("APK install intent failed; manual install required")
-            return ApplyResult.MANUAL_REQUIRED
+            return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
         logger.info("Triggered APK install for %s", apk)
-        return ApplyResult.APPLIED
+        return ApplyOutcome(ApplyResult.APPLIED)
 
 
 if __name__ == "__main__":
@@ -320,4 +409,5 @@ if __name__ == "__main__":
             progress=lambda d, t: print(f"Downloaded {d}/{t}"),
         )
 
-        print(uc.apply(info, installer_path))
+        outcome = uc.apply(info, installer_path)
+        print(f"Apply: {outcome.result.value} (pid {outcome.process_id})")

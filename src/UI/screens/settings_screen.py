@@ -17,6 +17,7 @@ class Settings(BaseScreen):
         collection_manager: Any = None,
         page: ft.Page | None = None,
         on_back: Any = None,
+        on_install_launched: Any = None,
     ):
         super().__init__(secondary_options=True)
         self.title = "Settings"
@@ -33,7 +34,12 @@ class Settings(BaseScreen):
             page=page,
             on_back=on_back,
         )
-        self.app_info_section = AppInfo(config=config, page=page, on_back=on_back)
+        self.app_info_section = AppInfo(
+            config=config,
+            page=page,
+            on_back=on_back,
+            on_install_launched=on_install_launched,
+        )
         self.content = self.general_section
 
     def _get_secondary_options(self) -> list[NavigationDestination]:

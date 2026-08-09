@@ -40,7 +40,6 @@ from utils.constants import (
     MIN_PAGE_WIDTH,
     MOBILE_DEFAULT_HEIGHT,
     MOBILE_DEFAULT_WIDTH,
-    RELEASES_PAGE_URL,
 )
 from utils.models import (
     AppLayout,
@@ -50,7 +49,8 @@ from utils.models import (
     SecondaryNavigationChangeData,
     SecondaryNavigationPattern,
 )
-from utils.platform import detect_os
+from utils.platform import acquire_instance_mutex, detect_os
+from utils.versions import get_current_version
 
 logging.basicConfig(
     level=logging.INFO,
@@ -72,6 +72,11 @@ def _theme_mode_from_config(mode: str) -> ft.ThemeMode:
 
 class App:
     def __init__(self, page: ft.Page):
+        # The installer (AppMutex=Unscreen_Mutex) uses this to detect and
+        # close a running app before updating it.
+        if detect_os() == OSType.WINDOWS:
+            acquire_instance_mutex("Unscreen_Mutex")
+
         self.page = page
         self.page.title = "Unscreen"
 
@@ -105,6 +110,7 @@ class App:
             collection_manager=self.collection_manager,
             page=self.page,
             on_back=self._go_back,
+            on_install_launched=self._request_app_exit,
         )
 
         self.content_container = ft.Container(expand=True)
@@ -226,7 +232,7 @@ class App:
         self._apply_layout(self.layout)
 
     async def _startup_update_check(self) -> None:
-        """Silently look for a newer release; notify via snackbar when found."""
+        """Silently look for a newer release; offer the update when found."""
         try:
             info = await asyncio.to_thread(UpdateChecker().check_for_update)
         except Exception:
@@ -236,14 +242,40 @@ class App:
             return
         snack = ft.SnackBar(
             content=ft.Text(f"Update v{info.version} is available"),
-            action="View",
-            on_action=lambda _e: self.page.launch_url(RELEASES_PAGE_URL),
+            action="Update now",
+            on_action=lambda _e: self._open_update_dialog(info),
             open=True,
         )
         with suppress(RuntimeError):
             # The overlay may not be attached yet (bridge races during boot).
             self.page.overlay.append(snack)
             self.page.update()
+
+    def _open_update_dialog(self, info) -> None:
+        """Offer download + install for a known update (settings or snackbar)."""
+        from UI.screens.settings.app_info import show_update_dialog
+
+        show_update_dialog(
+            self.page,
+            info,
+            get_current_version(),
+            on_install_launched=self._request_app_exit,
+        )
+
+    def _request_app_exit(self) -> None:
+        """Called once the new installer is running; leave the rest to it.
+
+        The app must exit so the installer can replace the running executable
+        (the relaunch watchdog reopens it once setup has finished).
+        """
+
+        async def _destroy() -> None:
+            try:
+                await self.page.window.destroy()
+            except Exception:
+                logger.exception("Failed to close the window after update launch")
+
+        asyncio.create_task(_destroy())
 
     def _handle_page_resize(self, _event):
         self._apply_responsive_layout()

@@ -57,33 +57,40 @@ def enable() -> bool:
 
 
 def disable() -> bool:
+    """Delete the auto-start entry from both the current user and machine hives.
+
+    Machine installs (Inno "install for anyone") write to HKLM, so toggling
+    the setting off must clear that hive too - the per-user hive alone would
+    leave the app starting at every logon.
+    """
     if winreg is None:
         return False
-    try:
-        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE)
-        winreg.DeleteValue(key, VALUE_NAME)
-        winreg.CloseKey(key)
-        logger.info("Auto-start disabled")
-        return True
-    except FileNotFoundError:
-        return True
-    except Exception:
-        logger.exception("Failed to disable auto-start")
-        return False
+    result = True
+    for root_key in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            key = winreg.OpenKey(root_key, RUN_KEY, 0, winreg.KEY_SET_VALUE)
+            winreg.DeleteValue(key, VALUE_NAME)
+            winreg.CloseKey(key)
+            logger.info("Auto-start disabled in %r", root_key)
+        except FileNotFoundError:
+            pass
+        except Exception:
+            logger.exception("Failed to disable auto-start in %r", root_key)
+            result = False
+    return result
 
 
 def is_enabled() -> bool:
     if winreg is None:
         return False
-    try:
-        key = winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_QUERY_VALUE
-        )
-        winreg.QueryValueEx(key, VALUE_NAME)
-        winreg.CloseKey(key)
-        return True
-    except FileNotFoundError:
-        return False
-    except Exception:
-        logger.exception("Failed to query auto-start")
-        return False
+    for root_key in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            key = winreg.OpenKey(root_key, RUN_KEY, 0, winreg.KEY_QUERY_VALUE)
+            winreg.QueryValueEx(key, VALUE_NAME)
+            winreg.CloseKey(key)
+            return True
+        except FileNotFoundError:
+            continue
+        except Exception:
+            logger.exception("Failed to query auto-start in %r", root_key)
+    return False
