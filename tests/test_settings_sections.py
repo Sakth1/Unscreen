@@ -304,13 +304,11 @@ class TestGeneralSection:
             scaffold = section.content
             assert isinstance(scaffold, ft.Column)
             assert (
-                scaffold.horizontal_alignment
-                == ft.CrossAxisAlignment.STRETCH
+                scaffold.horizontal_alignment == ft.CrossAxisAlignment.STRETCH
             ), "scaffold must stretch its children across the full width"
             cards_column = scaffold.controls[1]
             assert (
-                cards_column.horizontal_alignment
-                == ft.CrossAxisAlignment.STRETCH
+                cards_column.horizontal_alignment == ft.CrossAxisAlignment.STRETCH
             ), "cards column must stretch cards across the full width"
             assert cards_column.controls, "no cards in the section"
             for card in cards_column.controls:
@@ -321,8 +319,7 @@ class TestGeneralSection:
                     if isinstance(c, ft.Column) and c.spacing == 8
                 )
                 assert (
-                    inner.horizontal_alignment
-                    == ft.CrossAxisAlignment.STRETCH
+                    inner.horizontal_alignment == ft.CrossAxisAlignment.STRETCH
                 ), "card content must span the card width"
 
     def test_on_sub_route_refreshes_values(self, tmp_path):
@@ -403,9 +400,7 @@ class TestDataDiagnosticsSection:
         from UI.screens.settings.data import DataDiagnostics
 
         section = DataDiagnostics(config=_config(tmp_path))
-        rows = [
-            c for c in _walk(section.content) if isinstance(c, ft.Row) and c.wrap
-        ]
+        rows = [c for c in _walk(section.content) if isinstance(c, ft.Row) and c.wrap]
         assert any(
             section._export_csv_btn in (row.controls or []) for row in rows
         ), "export buttons are not in a wrapping row"
@@ -449,9 +444,7 @@ class TestAppInfoSection:
         from UI.screens.settings.app_info import AppInfo
 
         section = AppInfo(config=_config(tmp_path))
-        rows = [
-            c for c in _walk(section.content) if isinstance(c, ft.Row) and c.wrap
-        ]
+        rows = [c for c in _walk(section.content) if isinstance(c, ft.Row) and c.wrap]
         assert any(
             section._check_btn in (row.controls or []) for row in rows
         ), "update buttons are not in a wrapping row"
