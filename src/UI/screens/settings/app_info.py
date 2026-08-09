@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import platform
 import tempfile
 from pathlib import Path
 from typing import Callable, Optional
@@ -21,7 +22,6 @@ from UI.screens.settings.settings_card import SettingsCard
 from utils.constants import RELEASES_PAGE_URL
 from utils.files import remove_file
 from utils.flet_helpers import safe_pop_dialog, safe_update, show_snack_bar
-from utils.models import OSType
 from utils.paths import get_data_dir
 from utils.platform import detect_os, is_packaged
 
@@ -162,7 +162,7 @@ def show_update_dialog(
 
         set_busy("Verifying…")
         await asyncio.sleep(0.05)
-        if detect_os() == OSType.ANDROID:
+        if platform.system() == "Android":
             _install_android(installer_path, update)
             return
         _install_windows(installer_path, update)
@@ -202,7 +202,7 @@ def show_update_dialog(
             return
         close()
         if outcome.result == ApplyResult.MANUAL_REQUIRED:
-            toast("Open the downloaded APK manually to install it")
+            toast("Allow app installs from Android settings, then try again")
         elif outcome.result == ApplyResult.APPLIED:
             toast("Installer opened — follow the on-screen instructions")
         else:
