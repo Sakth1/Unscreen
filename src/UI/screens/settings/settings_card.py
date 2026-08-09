@@ -10,6 +10,7 @@ class SettingsCard(ft.Card):
             padding=16,
             content=ft.Column(
                 spacing=8,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
                 controls=[
                     ft.Text(title, size=14, weight=ft.FontWeight.BOLD),
                     *controls,

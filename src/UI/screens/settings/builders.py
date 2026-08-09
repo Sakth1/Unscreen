@@ -31,12 +31,17 @@ def section_scaffold(
         spacing=16,
         expand=True,
         scroll=ft.ScrollMode.AUTO,
+        horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         controls=[
             ft.Row(
                 controls=header_controls,
                 alignment=ft.MainAxisAlignment.START,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
-            ft.Column(spacing=16, controls=cards),
+            ft.Column(
+                spacing=16,
+                controls=cards,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+            ),
         ],
     )
