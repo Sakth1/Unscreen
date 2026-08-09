@@ -14,11 +14,22 @@ def normalize_version(version: str) -> str:
 def parse_version(
     version: str,
 ) -> tuple[tuple[int, int, int], tuple[str, ...]] | None:
+    """Return ``((major, minor, patch), prerelease)`` for a version string.
+
+    Accepts both the tag form (``0.4.5-dev1``) and the PEP 440 form that
+    package metadata reports (``0.4.5.dev1``), with an optional ``+local``
+    suffix. Returns ``None`` when the string cannot be parsed.
+    """
     core = normalize_version(version)
+    core, _, _ = core.partition("+")
     prerelease: tuple[str, ...] = ()
     if "-" in core:
         core, _, prerelease_str = core.partition("-")
         prerelease = tuple(prerelease_str.split("."))
+    elif core.count(".") > 2:
+        parts = core.split(".")
+        core = ".".join(parts[:3])
+        prerelease = tuple(parts[3:])
     parts = core.split(".")
     if len(parts) != 3 or not all(part.isdigit() for part in parts):
         return None
@@ -45,7 +56,7 @@ def compare_versions(left: str, right: str) -> int:
         return 1
     if not right_pre:
         return -1
-    for left_ident, right_ident in zip(left_pre, right_pre, strict=True):
+    for left_ident, right_ident in zip(left_pre, right_pre, strict=False):
         if left_ident == right_ident:
             continue
         left_is_num = left_ident.isdigit()

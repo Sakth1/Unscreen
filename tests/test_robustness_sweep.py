@@ -8,13 +8,49 @@ loudly but gracefully.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+import asyncio
+from unittest.mock import MagicMock, patch
 
 from sweep_helpers import mock_page
 
 from core.storage import Storage
 from utils.bus import TickBus
 from utils.models import OSType, ScreenFormFactor, Tick
+
+
+class TestStartupUpdateCheck:
+    def _app(self, tmp_path, prereleases: bool):
+        from core.config_manager import ConfigManager
+
+        config = ConfigManager(path=str(tmp_path / "config.json"))
+        config.check_prereleases = prereleases
+        config.save()
+        page = mock_page()
+        page.window.width = 400
+        page.window.height = 800
+        with (
+            patch("app.detect_os", return_value=OSType.WINDOWS),
+            patch("app.ConfigManager", return_value=config),
+        ):
+            from app import App
+
+            return App(page)
+
+    def test_startup_check_passes_stable_channel(self, tmp_path):
+        checker = MagicMock()
+        checker.check_for_update.return_value = None
+        app = self._app(tmp_path, prereleases=False)
+        with patch("app.UpdateChecker", return_value=checker):
+            asyncio.run(app._startup_update_check())
+        checker.check_for_update.assert_called_once_with(include_prereleases=False)
+
+    def test_startup_check_passes_prerelease_flag(self, tmp_path):
+        checker = MagicMock()
+        checker.check_for_update.return_value = None
+        app = self._app(tmp_path, prereleases=True)
+        with patch("app.UpdateChecker", return_value=checker):
+            asyncio.run(app._startup_update_check())
+        checker.check_for_update.assert_called_once_with(include_prereleases=True)
 
 
 class TestCorruptDatabaseRecovery:

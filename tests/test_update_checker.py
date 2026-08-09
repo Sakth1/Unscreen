@@ -162,6 +162,66 @@ def test_check_returns_none_when_current_is_newer_or_equal():
         assert checker.check_for_update() is None
 
 
+def _release(tag: str, prerelease: bool = False, **extra) -> dict:
+    return {**RELEASE, "tag_name": f"v{tag}", "prerelease": prerelease, **extra}
+
+
+def test_check_reports_newer_release_from_list():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [_release("0.4.1"), _release("9.9.9")]
+    with patch("core.update_checker._api_request", return_value=releases):
+        update = checker.check_for_update()
+    assert update is not None
+    assert update.version == "9.9.9"
+    assert update.prerelease is False
+
+
+def test_check_stable_only_skips_newer_prerelease():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [_release("0.4.2"), _release("9.9.9-dev.1", prerelease=True)]
+    with patch("core.update_checker._api_request", return_value=releases):
+        assert checker.check_for_update() is None
+
+
+def test_check_prereleases_on_picks_newest_overall():
+    checker = UpdateChecker(current_version="0.4.2", include_prereleases=True)
+    releases = [_release("9.9.9-dev.1", prerelease=True), _release("0.4.2")]
+    with patch("core.update_checker._api_request", return_value=releases):
+        update = checker.check_for_update()
+    assert update is not None
+    assert update.version == "9.9.9-dev.1"
+    assert update.prerelease is True
+
+
+def test_check_prereleases_on_still_chooses_newer_stable():
+    checker = UpdateChecker(current_version="0.4.2", include_prereleases=True)
+    releases = [_release("9.9.9-dev.1", prerelease=True), _release("9.9.9")]
+    with patch("core.update_checker._api_request", return_value=releases):
+        update = checker.check_for_update()
+    assert update is not None
+    assert update.version == "9.9.9"
+
+
+def test_check_prereleases_off_with_only_prereleases_returns_none():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [_release("9.9.9-dev.1", prerelease=True)]
+    with patch("core.update_checker._api_request", return_value=releases):
+        assert checker.check_for_update() is None
+
+
+def test_check_skips_drafts_and_unparsable_tags():
+    checker = UpdateChecker(current_version="0.4.2", include_prereleases=True)
+    releases = [
+        _release("draft-junk", draft=True),
+        {"tag_name": "not-a-version", "prerelease": False},
+        _release("9.9.9"),
+    ]
+    with patch("core.update_checker._api_request", return_value=releases):
+        update = checker.check_for_update()
+    assert update is not None
+    assert update.version == "9.9.9"
+
+
 def test_check_returns_manual_only_when_no_matching_asset():
     checker = UpdateChecker(current_version="0.4.2")
     release = {

@@ -263,6 +263,11 @@ class AppInfo(ft.Container):
             label="Check for updates on startup",
             on_change=self._on_auto_update_changed,
         )
+        self._prerelease_switch = ft.Switch(
+            value=self._config.check_prereleases,
+            label="Check for prerelease builds",
+            on_change=self._on_prerelease_changed,
+        )
         self._check_btn = ft.FilledTonalButton(
             "Check for updates",
             icon=ft.Icons.UPDATE,
@@ -280,6 +285,7 @@ class AppInfo(ft.Container):
                 [
                     ft.Text(f"Installed version: {self._version}"),
                     self._auto_update_switch,
+                    self._prerelease_switch,
                     ft.Row(
                         controls=[self._check_btn, self._open_releases_btn],
                         wrap=True,
@@ -321,6 +327,14 @@ class AppInfo(ft.Container):
             + ("enabled" if self._config.auto_update_enabled else "disabled")
         )
 
+    def _on_prerelease_changed(self, event: ft.ControlEvent) -> None:
+        self._config.check_prereleases = bool(getattr(event.control, "value", False))
+        self._config.save()
+        self._toast(
+            "Prerelease check "
+            + ("enabled" if self._config.check_prereleases else "disabled")
+        )
+
     def _check_for_updates(self, _event) -> None:
         if self._page is None or self._checking:
             return
@@ -334,7 +348,10 @@ class AppInfo(ft.Container):
     async def _run_update_check(self) -> None:
         page = self._page
         try:
-            info = await asyncio.to_thread(self._update_checker.check_for_update)
+            info = await asyncio.to_thread(
+                self._update_checker.check_for_update,
+                include_prereleases=self._config.check_prereleases,
+            )
         except UpdateCheckError as exc:
             self._toast("Update check failed")
             if page is not None:
@@ -372,5 +389,6 @@ class AppInfo(ft.Container):
     def on_sub_route(self, route: str) -> None:
         """Refresh control values when the section becomes visible."""
         self._auto_update_switch.value = self._config.auto_update_enabled
+        self._prerelease_switch.value = self._config.check_prereleases
         if self.parent is not None:
             self.update()

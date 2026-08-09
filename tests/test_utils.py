@@ -21,6 +21,19 @@ class TestVersions:
         assert compare_versions("1.0.0-rc.1", "1.0.0-rc.2") < 0
         assert compare_versions("1.0.0-beta", "1.0.0-alpha") > 0
 
+    def test_compare_versions_orders_pep440_dotted_prereleases(self):
+        assert compare_versions("0.4.5.dev1", "0.4.5") < 0
+        assert compare_versions("0.4.5.dev1", "0.4.4") > 0
+        assert compare_versions("0.4.5.dev1", "0.4.5-dev1") == 0
+        assert compare_versions("0.4.5.dev2", "0.4.5.dev1") > 0
+
+    def test_compare_versions_ignores_pep440_local_suffix(self):
+        assert compare_versions("0.4.5.dev1+local.x", "0.4.5.dev1") == 0
+
+    def test_compare_versions_handles_unequal_prerelease_lengths(self):
+        assert compare_versions("1.0.0-rc.1.a", "1.0.0-rc.1") > 0
+        assert compare_versions("1.0.0-rc.1", "1.0.0-rc.1.a") < 0
+
     def test_compare_versions_treats_garbage_as_equal(self):
         assert compare_versions("not-a-version", "0.4.2") == 0
 
