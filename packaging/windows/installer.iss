@@ -27,6 +27,13 @@
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
+; VersionInfo and version comparisons only accept numeric dotted versions;
+; derive one from the semver (e.g. "0.4.5-dev" -> "0.4.5").
+#if Pos("-", MyAppVersion) > 0
+  #define MyAppVersionNumeric Copy(MyAppVersion, 1, Pos("-", MyAppVersion) - 1)
+#else
+  #define MyAppVersionNumeric MyAppVersion
+#endif
 #ifndef MyAppExeName
   #define MyAppExeName "unscreen.exe"
 #endif
@@ -72,9 +79,9 @@ AppModifyPath={app}\Unscreen-Setup.exe /maintenance
 UninstallDisplayName={#MyAppName} {#MyAppVersion}
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=..\..\src\assets\icon_windows.ico
-VersionInfoVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersionNumeric}
 VersionInfoProductName={#MyAppName}
-VersionInfoProductVersion={#MyAppVersion}
+VersionInfoProductVersion={#MyAppVersionNumeric}
 VersionInfoDescription={#MyAppComments}
 VersionInfoCompany={#MyAppPublisher}
 ArchitecturesAllowed=x64compatible
@@ -192,7 +199,7 @@ begin
   begin
     InstalledUninstallCmd := UninstallCmd;
     InstalledDir := Dir;
-    Compare := CompareVersions(InstalledVersion, '{#MyAppVersion}');
+    Compare := CompareVersions(InstalledVersion, '{#MyAppVersionNumeric}');
     if Compare = 0 then
       AppMode := 'repair'
     else if Compare < 0 then
@@ -321,7 +328,7 @@ begin
   Log('Uninstall key not found after install; registering it explicitly.');
   RegWriteStringValue(Root, UninstallKeyBase, 'DisplayName',
     '{#MyAppName} {#MyAppVersion}');
-  RegWriteStringValue(Root, UninstallKeyBase, 'DisplayVersion', '{#MyAppVersion}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'DisplayVersion', '{#MyAppVersionNumeric}');
   RegWriteStringValue(Root, UninstallKeyBase, 'DisplayIcon',
     ExpandConstant('{app}\{#MyAppExeName}'));
   RegWriteStringValue(Root, UninstallKeyBase, 'Publisher', '{#MyAppPublisher}');
