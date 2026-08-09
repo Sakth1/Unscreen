@@ -432,16 +432,57 @@ class UpdateChecker:
             Intent = autoclass("android.content.Intent")
             Uri = autoclass("android.net.Uri")
             File = autoclass("java.io.File")
+            Settings = autoclass("android.provider.Settings")
+            BuildVersion = autoclass("android.os.Build$VERSION")
+            FileProvider = autoclass("androidx.core.content.FileProvider")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            activity = PythonActivity.mActivity
+        except Exception:
+            logger.exception(
+                "Android install bridge unavailable; manual install required"
+            )
+            return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
+        if BuildVersion.SDK_INT >= 26:
+            try:
+                if not (
+                    activity.getPackageManager().canRequestPackageInstalls(
+                        activity.getPackageName()
+                    )
+                ):
+                    logger.info(
+                        "Unknown sources not allowed; opening install-source settings"
+                    )
+                    intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
+                    intent.setData(Uri.parse(f"package:{activity.getPackageName()}"))
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    activity.startActivity(intent)
+                    return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
+            except Exception:
+                logger.exception("Failed to check unknown-source permission")
+        try:
+            if BuildVersion.SDK_INT >= 24:
+                uri = FileProvider.getUriForFile(
+                    activity,
+                    f"{activity.getPackageName()}.provider",
+                    File(str(apk)),
+                )
+                flags = (
+                    Intent.FLAG_ACTIVITY_NEW_TASK
+                    | Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            else:
+                uri = Uri.fromFile(File(str(apk)))
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK
             intent = Intent(Intent.ACTION_VIEW)
             intent.setDataAndType(
-                Uri.fromFile(File(str(apk))), "application/vnd.android.package-archive"
+                uri, "application/vnd.android.package-archive"
             )
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            PythonActivity.mActivity.startActivity(intent)
+            intent.addFlags(flags)
+            activity.startActivity(intent)
         except Exception:
             logger.exception("APK install intent failed; manual install required")
             return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
+        remove_file(apk)
         logger.info("Triggered APK install for %s", apk)
         return ApplyOutcome(ApplyResult.APPLIED)
 

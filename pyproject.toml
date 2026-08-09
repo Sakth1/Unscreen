@@ -1,6 +1,6 @@
 [project]
 name = "unscreen"
-version = "0.4.6-dev2"
+version = "0.4.6-dev3"
 description = "Cross-device app usage timeline tracker"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -94,6 +94,7 @@ dependencies = [
 
 [tool.flet.android.permission]
 "android.permission.PACKAGE_USAGE_STATS" = true
+"android.permission.REQUEST_INSTALL_PACKAGES" = true
 "android.permission.WRITE_EXTERNAL_STORAGE" = { maxSdkVersion = "28" }
 "android.permission.READ_EXTERNAL_STORAGE" = { maxSdkVersion = "32" }
 

@@ -472,19 +472,44 @@ def test_apply_android_manual_without_jnius(tmp_path):
     ):
         outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
     assert outcome.result == ApplyResult.MANUAL_REQUIRED
+    assert apk.exists()
 
 
-def test_apply_android_triggers_install_intent(tmp_path):
+def _android_bridge(sdk_int: int, can_install: bool = True):
+    """Build a fake ``jnius`` module bridging Java classes for tests."""
     jnius = types.ModuleType("jnius")
     activity = MagicMock()
-    activity.mActivity = MagicMock()
+    activity.mActivity.getPackageName.return_value = "com.mycompany.unscreen"
+    package_manager = MagicMock()
+    package_manager.canRequestPackageInstalls.return_value = can_install
+    activity.mActivity.getPackageManager.return_value = package_manager
+    real_files: list[str] = []
+    classes: dict[str, MagicMock] = {}
 
-    def fake_autoclass(name):
+    def fake_autoclass(name: str):
         if name == "org.kivy.android.PythonActivity":
             return activity
-        return MagicMock()
+        if name == "android.os.Build$VERSION":
+            return types.SimpleNamespace(SDK_INT=sdk_int)
+        if name == "java.io.File":
+            return lambda path: real_files.append(str(path)) or path
+        if name == "android.content.Intent":
+            intent_class = MagicMock()
+            intent_class.FLAG_ACTIVITY_NEW_TASK = 0x10000000
+            intent_class.FLAG_GRANT_READ_URI_PERMISSION = 0x00000001
+            intent_class.ACTION_VIEW = 0x00010000
+            classes[name] = intent_class
+            return intent_class
+        mock = MagicMock()
+        classes[name] = mock
+        return mock
 
     jnius.autoclass = fake_autoclass
+    return jnius, activity, real_files, classes
+
+
+def test_apply_android_uses_file_provider_on_modern_api(tmp_path):
+    jnius, activity, real_files, classes = _android_bridge(sdk_int=34)
     checker = UpdateChecker(current_version="0.4.2")
     apk = tmp_path / "0.4.2.apk"
     apk.write_bytes(b"x")
@@ -494,8 +519,84 @@ def test_apply_android_triggers_install_intent(tmp_path):
         patch.dict(sys.modules, {"jnius": jnius}),
     ):
         outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+
     assert outcome.result == ApplyResult.APPLIED
+    file_provider = classes["androidx.core.content.FileProvider"]
+    file_provider.getUriForFile.assert_called_once_with(
+        activity.mActivity,
+        "com.mycompany.unscreen.provider",
+        str(apk),
+    )
+    assert real_files == [str(apk)]
+    intent = classes["android.content.Intent"]
+    uri, mime = intent.return_value.setDataAndType.call_args.args
+    assert mime == "application/vnd.android.package-archive"
+    assert uri is file_provider.getUriForFile.return_value
+    flags = {call.args[0] for call in intent.return_value.addFlags.call_args_list}
+    assert flags == {
+        classes["android.content.Intent"].FLAG_ACTIVITY_NEW_TASK
+        | classes["android.content.Intent"].FLAG_GRANT_READ_URI_PERMISSION
+    }
+    classes["android.net.Uri"].fromFile.assert_not_called()
     assert activity.mActivity.startActivity.called
+    assert not apk.exists()
+
+
+def test_apply_android_falls_back_to_file_uri_before_api_24(tmp_path):
+    jnius, activity, real_files, classes = _android_bridge(sdk_int=21)
+    checker = UpdateChecker(current_version="0.4.2")
+    apk = tmp_path / "0.4.2.apk"
+    apk.write_bytes(b"x")
+    with (
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Android"),
+        patch.dict(sys.modules, {"jnius": jnius}),
+    ):
+        outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+
+    assert outcome.result == ApplyResult.APPLIED
+    classes["androidx.core.content.FileProvider"].getUriForFile.assert_not_called()
+    uri, mime = classes["android.content.Intent"].return_value.setDataAndType.call_args.args
+    assert mime == "application/vnd.android.package-archive"
+    assert uri == classes["android.net.Uri"].fromFile.return_value
+    flags = {
+        call.args[0]
+        for call in classes["android.content.Intent"].return_value.addFlags.call_args_list
+    }
+    assert flags == {classes["android.content.Intent"].FLAG_ACTIVITY_NEW_TASK}
+    assert (
+        classes["android.content.Intent"].FLAG_GRANT_READ_URI_PERMISSION
+        not in flags
+    )
+    assert activity.mActivity.startActivity.called
+    assert not apk.exists()
+
+
+def test_apply_android_opens_unknown_sources_settings_when_not_allowed(tmp_path):
+    jnius, activity, real_files, classes = _android_bridge(sdk_int=34, can_install=False)
+    checker = UpdateChecker(current_version="0.4.2")
+    apk = tmp_path / "0.4.2.apk"
+    apk.write_bytes(b"x")
+    with (
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Android"),
+        patch.dict(sys.modules, {"jnius": jnius}),
+    ):
+        outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+
+    assert outcome.result == ApplyResult.MANUAL_REQUIRED
+    intent = classes["android.content.Intent"].return_value
+    intent.setData.assert_called_once_with(
+        classes["android.net.Uri"].parse.return_value
+    )
+    classes["android.net.Uri"].parse.assert_called_once_with(
+        "package:com.mycompany.unscreen"
+    )
+    assert (
+        classes["android.content.Intent"].return_value.setDataAndType.call_count == 0
+    )
+    assert activity.mActivity.startActivity.called
+    assert apk.exists()
 
 
 def test_apply_unsupported_platform_is_not_applicable(tmp_path):
