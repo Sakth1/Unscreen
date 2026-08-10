@@ -9,6 +9,7 @@ from pathlib import Path
 
 from core.device_identity import get_device_id
 from utils.paths import get_data_dir
+from utils.platform import is_android
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +30,7 @@ class Storage:
     def __init__(self, db_path: str | None = None):
         self._device_id = get_device_id()
         self._short_id = self._device_id[:8]
-        self._platform = platform.system().lower()
+        self._platform = "android" if is_android() else platform.system().lower()
 
         path = db_path or _db_path()
         if self._device_id == self._TEST_DEVICE_ID and path != ":memory:":

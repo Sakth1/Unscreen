@@ -1,6 +1,8 @@
 import os
 import platform
 
+from utils.platform import is_android
+
 _DATA_DIR_NAME = "Unscreen"
 _ANDROID_PACKAGE = "com.mycompany.unscreen"
 
@@ -10,13 +12,12 @@ def get_data_dir() -> str:
     if flet_data:
         return flet_data
 
-    system = platform.system()
-    if system == "Android":
+    if is_android():
         home = os.environ.get("HOME")
         if home:
             return os.path.join(home, _DATA_DIR_NAME)
         return os.path.join(f"/data/data/{_ANDROID_PACKAGE}/files", _DATA_DIR_NAME)
-    if system == "Windows":
+    if platform.system() == "Windows":
         base = os.environ.get("APPDATA")
         if base:
             return os.path.join(base, _DATA_DIR_NAME)
