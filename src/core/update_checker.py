@@ -14,7 +14,7 @@ from typing import Callable, Sequence
 
 from utils.constants import RELEASES_PAGE_URL, RELEASES_REPO_URL
 from utils.files import remove_file
-from utils.platform import is_packaged
+from utils.platform import is_android, is_packaged
 from utils.versions import (
     compare_versions,
     get_current_version,
@@ -106,7 +106,7 @@ def _select_asset(release: dict) -> dict | None:
         name = asset.get("name", "")
         if system == "Windows" and name.endswith("-setup.exe"):
             return asset
-        if system == "Android" and name.endswith(".apk"):
+        if is_android() and name.endswith(".apk"):
             return asset
     if system == "Windows":
         for asset in assets:
@@ -398,7 +398,7 @@ class UpdateChecker:
         system = platform.system()
         if system == "Windows":
             return self._apply_windows(installer_path, extra_args)
-        if system == "Android":
+        if is_android():
             return self._apply_android(installer_path)
         logger.warning("No update apply path for platform %s", system)
         return ApplyOutcome(ApplyResult.NOT_APPLICABLE)

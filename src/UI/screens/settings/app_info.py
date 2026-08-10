@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import platform
 import tempfile
 from pathlib import Path
 from typing import Callable, Optional
@@ -23,7 +22,7 @@ from utils.constants import RELEASES_PAGE_URL
 from utils.files import remove_file
 from utils.flet_helpers import safe_pop_dialog, safe_update, show_snack_bar
 from utils.paths import get_data_dir
-from utils.platform import detect_os, is_packaged
+from utils.platform import detect_os, is_android, is_packaged
 
 logger = logging.getLogger(__name__)
 
@@ -162,7 +161,7 @@ def show_update_dialog(
 
         set_busy("Verifying…")
         await asyncio.sleep(0.05)
-        if platform.system() == "Android":
+        if is_android():
             _install_android(installer_path, update)
             return
         _install_windows(installer_path, update)

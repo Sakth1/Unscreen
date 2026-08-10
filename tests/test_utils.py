@@ -1,7 +1,10 @@
 import re
+import sys
 
 from utils.files import remove_file, timestamped_filename
+from utils.models import OSType
 from utils.net import extract_domain, is_trackable_url, normalize_url
+from utils.platform import detect_os, is_android, is_packaged
 from utils.time_utils import day_start_ms, fmt_timestamp, get_current_time_ms
 from utils.versions import compare_versions, normalize_version
 
@@ -128,3 +131,86 @@ class TestInstanceMutex:
                 ctypes.windll.kernel32.CloseHandle(first)
             if second:
                 ctypes.windll.kernel32.CloseHandle(second)
+
+
+class TestPlatform:
+    """Platform detection contracts.
+
+    ``platform.system()`` alone cannot tell Android apart from Linux on
+    CPython < 3.13, so detection relies on interpreter/runtime markers.
+    """
+
+    def test_is_android_false_on_desktop(self, monkeypatch):
+        monkeypatch.delenv("FLET_PLATFORM", raising=False)
+        monkeypatch.delenv("MAIN_ACTIVITY_HOST_CLASS_NAME", raising=False)
+        monkeypatch.delattr(sys, "getandroidapilevel", raising=False)
+        monkeypatch.setattr("utils.platform.platform.system", lambda: "Windows")
+        assert is_android() is False
+
+    def test_is_android_true_via_api_level(self, monkeypatch):
+        monkeypatch.delenv("FLET_PLATFORM", raising=False)
+        monkeypatch.delenv("MAIN_ACTIVITY_HOST_CLASS_NAME", raising=False)
+        monkeypatch.setattr(sys, "getandroidapilevel", lambda: 34, raising=False)
+        monkeypatch.setattr("utils.platform.platform.system", lambda: "Linux")
+        assert is_android() is True
+
+    def test_is_android_true_via_flet_platform_env(self, monkeypatch):
+        monkeypatch.delenv("MAIN_ACTIVITY_HOST_CLASS_NAME", raising=False)
+        monkeypatch.delattr(sys, "getandroidapilevel", raising=False)
+        monkeypatch.setenv("FLET_PLATFORM", "android")
+        monkeypatch.setattr("utils.platform.platform.system", lambda: "Linux")
+        assert is_android() is True
+
+    def test_is_android_true_via_host_activity_env(self, monkeypatch):
+        monkeypatch.delenv("FLET_PLATFORM", raising=False)
+        monkeypatch.delattr(sys, "getandroidapilevel", raising=False)
+        monkeypatch.setenv(
+            "MAIN_ACTIVITY_HOST_CLASS_NAME",
+            "com.flet.serious_python_android.PythonActivity",
+        )
+        monkeypatch.setattr("utils.platform.platform.system", lambda: "Linux")
+        assert is_android() is True
+
+    def test_is_android_true_when_system_reports_android(self, monkeypatch):
+        monkeypatch.delenv("FLET_PLATFORM", raising=False)
+        monkeypatch.delenv("MAIN_ACTIVITY_HOST_CLASS_NAME", raising=False)
+        monkeypatch.delattr(sys, "getandroidapilevel", raising=False)
+        monkeypatch.setattr("utils.platform.platform.system", lambda: "Android")
+        assert is_android() is True
+
+    def test_detect_os_windows(self, monkeypatch):
+        monkeypatch.setattr("utils.platform.is_android", lambda: False)
+        monkeypatch.setattr("utils.platform.platform.system", lambda: "Windows")
+        assert detect_os() is OSType.WINDOWS
+
+    def test_detect_os_android(self, monkeypatch):
+        monkeypatch.setattr("utils.platform.is_android", lambda: True)
+        monkeypatch.setattr("utils.platform.platform.system", lambda: "Linux")
+        assert detect_os() is OSType.ANDROID
+
+    def test_detect_os_linux_desktop_is_unknown(self, monkeypatch):
+        monkeypatch.setattr("utils.platform.is_android", lambda: False)
+        monkeypatch.setattr("utils.platform.platform.system", lambda: "Linux")
+        assert detect_os() is OSType.UNKNOWN
+
+    def test_is_packaged_frozen(self, monkeypatch):
+        monkeypatch.setattr(sys, "frozen", True, raising=False)
+        assert is_packaged() is True
+
+    def test_is_packaged_windows_executable(self, monkeypatch):
+        monkeypatch.setattr("utils.platform.is_android", lambda: False)
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        monkeypatch.setattr(
+            sys, "executable", r"C:\Program Files\Unscreen\Unscreen.exe"
+        )
+        assert is_packaged() is True
+
+    def test_is_packaged_python_interpreter_false(self, monkeypatch):
+        monkeypatch.setattr("utils.platform.is_android", lambda: False)
+        monkeypatch.setattr(sys, "frozen", False, raising=False)
+        monkeypatch.setattr(sys, "executable", r"C:\Python312\python.exe")
+        assert is_packaged() is False
+
+    def test_is_packaged_android_true(self, monkeypatch):
+        monkeypatch.setattr("utils.platform.is_android", lambda: True)
+        assert is_packaged() is True

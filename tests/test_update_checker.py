@@ -122,14 +122,30 @@ def test_select_asset_windows_falls_back_to_portable():
 
 
 def test_select_asset_android_picks_apk():
-    with patch("core.update_checker.platform.system", return_value="Android"):
+    with (
+        patch("core.update_checker.is_android", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Linux"),
+    ):
+        selected = _select_asset(RELEASE)
+        assert selected is not None
+        assert selected["name"] == "0.4.2.apk"
+
+
+def test_select_asset_android_picks_apk_when_system_reports_android():
+    with (
+        patch("core.update_checker.is_android", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Android"),
+    ):
         selected = _select_asset(RELEASE)
         assert selected is not None
         assert selected["name"] == "0.4.2.apk"
 
 
 def test_select_asset_returns_none_when_no_match():
-    with patch("core.update_checker.platform.system", return_value="Linux"):
+    with (
+        patch("core.update_checker.is_android", return_value=False),
+        patch("core.update_checker.platform.system", return_value="Linux"),
+    ):
         assert _select_asset(RELEASE) is None
 
 
@@ -467,6 +483,7 @@ def test_apply_android_manual_without_jnius(tmp_path):
     apk.write_bytes(b"x")
     with (
         patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=True),
         patch("core.update_checker.platform.system", return_value="Android"),
         patch.dict(sys.modules, {"jnius": None}),
     ):
@@ -515,6 +532,7 @@ def test_apply_android_uses_file_provider_on_modern_api(tmp_path):
     apk.write_bytes(b"x")
     with (
         patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=True),
         patch("core.update_checker.platform.system", return_value="Android"),
         patch.dict(sys.modules, {"jnius": jnius}),
     ):
@@ -549,6 +567,7 @@ def test_apply_android_falls_back_to_file_uri_before_api_24(tmp_path):
     apk.write_bytes(b"x")
     with (
         patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=True),
         patch("core.update_checker.platform.system", return_value="Android"),
         patch.dict(sys.modules, {"jnius": jnius}),
     ):
@@ -579,6 +598,7 @@ def test_apply_android_opens_unknown_sources_settings_when_not_allowed(tmp_path)
     apk.write_bytes(b"x")
     with (
         patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=True),
         patch("core.update_checker.platform.system", return_value="Android"),
         patch.dict(sys.modules, {"jnius": jnius}),
     ):
@@ -605,6 +625,7 @@ def test_apply_unsupported_platform_is_not_applicable(tmp_path):
     installer.write_bytes(b"x")
     with (
         patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=False),
         patch("core.update_checker.platform.system", return_value="Linux"),
     ):
         outcome = checker.apply(_update(), installer)

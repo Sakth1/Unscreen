@@ -34,7 +34,7 @@ from utils.models import (
 )
 from utils.net import extract_domain, is_trackable_url, normalize_url
 from utils.paths import get_data_dir, get_export_dir
-from utils.platform import detect_os, get_winreg, is_packaged
+from utils.platform import detect_os, get_winreg, is_android, is_packaged
 from utils.time_utils import (
     day_start_ms,
     fmt_timestamp,
@@ -82,6 +82,7 @@ __all__ = [
     "get_data_dir",
     "get_export_dir",
     "get_winreg",
+    "is_android",
     "is_packaged",
     "is_trackable_url",
     "normalize_url",
