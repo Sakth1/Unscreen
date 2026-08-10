@@ -19,6 +19,7 @@ from core.update_checker import (
     _api_request,
     _select_asset,
 )
+from utils.constants import RELEASES_PAGE_URL
 from utils.versions import (
     get_current_version,
 )
@@ -223,6 +224,85 @@ def test_check_prereleases_off_with_only_prereleases_returns_none():
     releases = [_release("9.9.9-dev.1", prerelease=True)]
     with patch("core.update_checker._api_request", return_value=releases):
         assert checker.check_for_update() is None
+
+
+def test_latest_release_url_stable_skips_newer_prerelease():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [
+        _release(
+            "0.4.7",
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.7",
+        ),
+        _release(
+            "0.4.8-dev.1",
+            prerelease=True,
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.8-dev.1",
+        ),
+    ]
+    with patch("core.update_checker._api_request", return_value=releases):
+        url = checker.latest_release_url(include_prereleases=False)
+    assert url == "https://github.com/Sakth1/Unscreen/releases/tag/v0.4.7"
+
+
+def test_latest_release_url_prereleases_picks_newest_prerelease():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [
+        _release(
+            "0.4.7",
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.7",
+        ),
+        _release(
+            "0.4.8-dev.1",
+            prerelease=True,
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.8-dev.1",
+        ),
+    ]
+    with patch("core.update_checker._api_request", return_value=releases):
+        url = checker.latest_release_url(include_prereleases=True)
+    assert url == "https://github.com/Sakth1/Unscreen/releases/tag/v0.4.8-dev.1"
+
+
+def test_latest_release_url_prereleases_still_prefers_newer_stable():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [
+        _release(
+            "0.4.9-dev.1",
+            prerelease=True,
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.9-dev.1",
+        ),
+        _release(
+            "0.4.9",
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.9",
+        ),
+    ]
+    with patch("core.update_checker._api_request", return_value=releases):
+        url = checker.latest_release_url(include_prereleases=True)
+    assert url == "https://github.com/Sakth1/Unscreen/releases/tag/v0.4.9"
+
+
+def test_latest_release_url_falls_back_without_releases():
+    checker = UpdateChecker(current_version="0.4.2")
+    with patch("core.update_checker._api_request", return_value=[]):
+        assert checker.latest_release_url() == RELEASES_PAGE_URL
+    with patch("core.update_checker._api_request", return_value=None):
+        assert checker.latest_release_url(include_prereleases=True) == RELEASES_PAGE_URL
+
+
+def test_latest_release_url_falls_back_when_api_fails():
+    checker = UpdateChecker(current_version="0.4.2")
+    with patch.object(
+        checker,
+        "_fetch_releases",
+        side_effect=UpdateCheckError("boom"),
+    ):
+        assert checker.latest_release_url(include_prereleases=True) == RELEASES_PAGE_URL
+
+
+def test_latest_release_url_falls_back_without_html_url():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [_release("0.4.7", html_url="")]
+    with patch("core.update_checker._api_request", return_value=releases):
+        assert checker.latest_release_url() == RELEASES_PAGE_URL
 
 
 def test_check_skips_drafts_and_unparsable_tags():
