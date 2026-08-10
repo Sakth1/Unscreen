@@ -655,24 +655,27 @@ def test_apply_android_falls_back_to_file_uri_before_api_24(tmp_path):
 
     assert outcome.result == ApplyResult.APPLIED
     classes["androidx.core.content.FileProvider"].getUriForFile.assert_not_called()
-    uri, mime = classes["android.content.Intent"].return_value.setDataAndType.call_args.args
+    uri, mime = classes[
+        "android.content.Intent"
+    ].return_value.setDataAndType.call_args.args
     assert mime == "application/vnd.android.package-archive"
     assert uri == classes["android.net.Uri"].fromFile.return_value
     flags = {
         call.args[0]
-        for call in classes["android.content.Intent"].return_value.addFlags.call_args_list
+        for call in classes[
+            "android.content.Intent"
+        ].return_value.addFlags.call_args_list
     }
     assert flags == {classes["android.content.Intent"].FLAG_ACTIVITY_NEW_TASK}
-    assert (
-        classes["android.content.Intent"].FLAG_GRANT_READ_URI_PERMISSION
-        not in flags
-    )
+    assert classes["android.content.Intent"].FLAG_GRANT_READ_URI_PERMISSION not in flags
     assert activity.mActivity.startActivity.called
     assert not apk.exists()
 
 
 def test_apply_android_opens_unknown_sources_settings_when_not_allowed(tmp_path):
-    jnius, activity, real_files, classes = _android_bridge(sdk_int=34, can_install=False)
+    jnius, activity, real_files, classes = _android_bridge(
+        sdk_int=34, can_install=False
+    )
     checker = UpdateChecker(current_version="0.4.2")
     apk = tmp_path / "0.4.2.apk"
     apk.write_bytes(b"x")
@@ -692,9 +695,7 @@ def test_apply_android_opens_unknown_sources_settings_when_not_allowed(tmp_path)
     classes["android.net.Uri"].parse.assert_called_once_with(
         "package:com.mycompany.unscreen"
     )
-    assert (
-        classes["android.content.Intent"].return_value.setDataAndType.call_count == 0
-    )
+    assert classes["android.content.Intent"].return_value.setDataAndType.call_count == 0
     assert activity.mActivity.startActivity.called
     assert apk.exists()
 

@@ -219,6 +219,54 @@ class TestGeneralSection:
         section._on_theme_changed(event)
         assert section._config.theme_mode == "dark"
 
+    def test_accent_theme_picker_defaults_to_purple(self, tmp_path):
+        from core.theme import theme_names
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        assert section._theme_picker.value == "purple"
+        assert len(section._theme_picker.options) == len(theme_names())
+
+    def test_accent_theme_picker_wired_via_on_select(self, tmp_path):
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        assert section._theme_picker.on_select == section._on_accent_theme_changed
+        assert "on_change" not in ft.Dropdown.__dataclass_fields__, (
+            "Dropdown has no on_change event in this flet version; "
+            "post-init on_change assignment never dispatches"
+        )
+
+    def test_accent_theme_change_writes_config(self, tmp_path):
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        event = types.SimpleNamespace(control=types.SimpleNamespace(value="teal"))
+        section._on_accent_theme_changed(event)
+        assert section._config.theme == "teal"
+
+    def test_accent_theme_change_ignores_unknown(self, tmp_path):
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        event = types.SimpleNamespace(control=types.SimpleNamespace(value="neon"))
+        section._on_accent_theme_changed(event)
+        assert section._config.theme == "purple"
+
+    def test_accent_theme_change_applies_to_page(self, tmp_path):
+        from unittest.mock import MagicMock
+
+        from UI.screens.settings.general import General
+
+        page = MagicMock()
+        section = General(config=_config(tmp_path), page=page)
+        event = types.SimpleNamespace(control=types.SimpleNamespace(value="blue"))
+        section._on_accent_theme_changed(event)
+        assert section._config.theme == "blue"
+        assert page.theme is not None
+        assert page.dark_theme is not None
+        page.update.assert_called_once()
+
     def test_maximized_switch_writes_config(self, tmp_path):
         from UI.screens.settings.general import General
 
@@ -350,6 +398,12 @@ class TestDataDiagnosticsSection:
             section._log_level_changed(None)
         assert section._config.log_level == "DEBUG"
         apply.assert_called_once_with("DEBUG")
+
+    def test_log_level_dropdown_wired_via_on_select(self, tmp_path):
+        from UI.screens.settings.data import DataDiagnostics
+
+        section = DataDiagnostics(config=_config(tmp_path))
+        assert section._log_level_dropdown.on_select == section._log_level_changed
 
     def test_export_writes_files(self, tmp_path, monkeypatch):
         from UI.screens.settings.data import DataDiagnostics

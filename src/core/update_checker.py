@@ -500,9 +500,7 @@ class UpdateChecker:
                 uri = Uri.fromFile(File(str(apk)))
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             intent = Intent(Intent.ACTION_VIEW)
-            intent.setDataAndType(
-                uri, "application/vnd.android.package-archive"
-            )
+            intent.setDataAndType(uri, "application/vnd.android.package-archive")
             intent.addFlags(flags)
             activity.startActivity(intent)
         except Exception:

@@ -18,6 +18,7 @@ DEFAULT_CONFIG = {
     "log_level": "INFO",
     "auto_start_enabled": False,
     "theme_mode": "system",
+    "theme": "purple",
     "auto_update_enabled": True,
     "check_prereleases": False,
     "start_maximized": True,
@@ -162,6 +163,14 @@ class ConfigManager:
     @theme_mode.setter
     def theme_mode(self, value: str) -> None:
         self._data["theme_mode"] = value
+
+    @property
+    def theme(self) -> str:
+        return self._data.get("theme", "purple")
+
+    @theme.setter
+    def theme(self, value: str) -> None:
+        self._data["theme"] = value
 
     @property
     def auto_update_enabled(self) -> bool:

@@ -53,6 +53,37 @@ class TestStartupUpdateCheck:
         checker.check_for_update.assert_called_once_with(include_prereleases=True)
 
 
+class TestAccentThemeStartup:
+    def _app(self, tmp_path, theme: str):
+        from core.config_manager import ConfigManager
+
+        config = ConfigManager(path=str(tmp_path / "config.json"))
+        config.theme = theme
+        config.save()
+        page = mock_page()
+        with (
+            patch("app.detect_os", return_value=OSType.WINDOWS),
+            patch("app.ConfigManager", return_value=config),
+        ):
+            from app import App
+
+            return App(page), page
+
+    def test_startup_applies_configured_seed(self, tmp_path):
+        app, page = self._app(tmp_path, "teal")
+        assert page.theme.color_scheme_seed == "#009688"
+        assert page.dark_theme.color_scheme_seed == "#009688"
+
+    def test_startup_defaults_to_purple(self, tmp_path):
+        app, page = self._app(tmp_path, "purple")
+        assert page.theme.color_scheme_seed == "#7C4DFF"
+        assert page.dark_theme.color_scheme_seed == "#7C4DFF"
+
+    def test_startup_falls_back_for_unknown_theme(self, tmp_path):
+        app, page = self._app(tmp_path, "neon")
+        assert page.theme.color_scheme_seed == "#7C4DFF"
+
+
 class TestCorruptDatabaseRecovery:
     def test_garbage_db_is_quarantined_and_rebuilt(self, tmp_path):
         db = tmp_path / "data.db"

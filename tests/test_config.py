@@ -244,6 +244,19 @@ class TestConfigProperties:
         cm2.load()
         assert cm2.theme_mode == "dark"
 
+    def test_accent_theme_default_and_roundtrip(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        cm = ConfigManager(path=str(tmp_path / "config.json"))
+        assert cm.theme == "purple"
+        cm.theme = "teal"
+        assert cm.theme == "teal"
+        cm.save()
+
+        cm2 = ConfigManager(path=str(tmp_path / "config.json"))
+        cm2.load()
+        assert cm2.theme == "teal"
+
     def test_auto_update_and_start_maximized_defaults(self, tmp_path):
         from core.config_manager import ConfigManager
 

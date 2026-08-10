@@ -54,8 +54,8 @@ class DataDiagnostics(ft.Container):
                 if self._config.log_level in _LOG_LEVELS
                 else "INFO"
             ),
+            on_select=self._log_level_changed,
         )
-        self._log_level_dropdown.on_change = self._log_level_changed
 
         self._export_csv_btn = ft.OutlinedButton(
             "Export as CSV",
@@ -128,8 +128,8 @@ class DataDiagnostics(ft.Container):
 
     # ── Handlers ──────────────────────────────────────────────────────────
 
-    def _log_level_changed(self, _event) -> None:
-        level = self._log_level_dropdown.value
+    def _log_level_changed(self, event) -> None:
+        level = self._log_level_dropdown.value or getattr(event, "data", None)
         if level not in _LOG_LEVELS:
             return
         self._config.log_level = level

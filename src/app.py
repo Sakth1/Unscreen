@@ -41,6 +41,7 @@ from utils.constants import (
     MOBILE_DEFAULT_HEIGHT,
     MOBILE_DEFAULT_WIDTH,
 )
+from utils.flet_helpers import apply_accent_theme
 from utils.models import (
     AppLayout,
     NavigationDestination,
@@ -91,6 +92,7 @@ class App:
         self.config = ConfigManager()
         self.config.load()
         self.page.theme_mode = _theme_mode_from_config(self.config.theme_mode)
+        apply_accent_theme(self.page, self.config.theme)
         self._set_window_icon()
 
         if self.config.start_maximized:

@@ -5,9 +5,10 @@ import flet as ft
 
 import core.auto_start as auto_start
 from core.config_manager import ConfigManager
+from core.theme import theme_is_valid, theme_label, theme_names
 from UI.screens.settings.builders import section_scaffold
 from UI.screens.settings.settings_card import SettingsCard
-from utils.flet_helpers import show_snack_bar
+from utils.flet_helpers import apply_accent_theme, show_snack_bar
 from utils.models import OSType
 from utils.platform import detect_os
 
@@ -98,6 +99,15 @@ class General(ft.Container):
             ],
             on_change=self._on_theme_changed,
         )
+        self._theme_picker = ft.Dropdown(
+            label="Accent color",
+            options=[
+                ft.dropdown.Option(key=name, text=theme_label(name))
+                for name in theme_names()
+            ],
+            value=self._config.theme,
+            on_select=self._on_accent_theme_changed,
+        )
         self._maximized_switch = ft.Switch(
             value=self._config.start_maximized,
             label="Start the window maximized",
@@ -137,6 +147,12 @@ class General(ft.Container):
                 [
                     ft.Row(
                         controls=[ft.Text("Theme mode"), self._theme_btn],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        wrap=True,
+                        run_spacing=8,
+                    ),
+                    ft.Row(
+                        controls=[ft.Text("Accent color"), self._theme_picker],
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         wrap=True,
                         run_spacing=8,
@@ -257,6 +273,19 @@ class General(ft.Container):
             except Exception:
                 logger.exception("Failed to apply theme mode %s", mode)
 
+    def _on_accent_theme_changed(self, event: ft.ControlEvent) -> None:
+        name = getattr(event.control, "value", None) or getattr(event, "data", None)
+        if not name or not theme_is_valid(name):
+            return
+        self._config.theme = name
+        self._config.save()
+        if self._page is not None:
+            try:
+                apply_accent_theme(self._page, name)
+                self._page.update()
+            except Exception:
+                logger.exception("Failed to apply accent theme %s", name)
+
     def _on_maximized_changed(self, event: ft.ControlEvent) -> None:
         self._config.start_maximized = bool(getattr(event.control, "value", False))
         self._config.save()
@@ -308,6 +337,7 @@ class General(ft.Container):
         self._autostart_switch.value = self._config.auto_start_enabled
         self._maximized_switch.value = self._config.start_maximized
         self._theme_btn.selected = [self._config.theme_mode]
+        self._theme_picker.value = self._config.theme
         for name, toggle in self._watcher_toggles.items():
             toggle.value = name in self._config.watchers_enabled
             field = self._watcher_fields.get(name)
