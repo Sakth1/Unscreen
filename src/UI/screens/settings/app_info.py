@@ -18,7 +18,6 @@ from core.update_flow import UpdateApplyError, Updater, installer_extra_args
 from UI.dialogs import show_alert_dialog
 from UI.screens.settings.builders import section_scaffold
 from UI.screens.settings.settings_card import SettingsCard
-from utils.constants import RELEASES_PAGE_URL
 from utils.files import remove_file
 from utils.flet_helpers import safe_pop_dialog, safe_update, show_snack_bar
 from utils.paths import get_data_dir
@@ -209,7 +208,7 @@ def show_update_dialog(
 
     def _open_releases(_event) -> None:
         close()
-        asyncio.create_task(page.launch_url(RELEASES_PAGE_URL))
+        asyncio.create_task(page.launch_url(update.html_url))
 
     def _later(_event) -> None:
         canceled["flag"] = True
@@ -275,7 +274,7 @@ class AppInfo(ft.Container):
         self._open_releases_btn = ft.OutlinedButton(
             "Open releases page",
             icon=ft.Icons.OPEN_IN_NEW,
-            url=RELEASES_PAGE_URL,
+            on_click=self._open_latest_release,
         )
 
         cards = [
@@ -380,6 +379,20 @@ class AppInfo(ft.Container):
                 self._version,
                 on_install_launched=self._on_install_launched,
             )
+
+    def _open_latest_release(self, _event) -> None:
+        if self._page is not None:
+            self._page.run_task(self._resolve_release_url)
+
+    async def _resolve_release_url(self) -> None:
+        page = self._page
+        if page is None:
+            return
+        url = await asyncio.to_thread(
+            self._update_checker.latest_release_url,
+            self._config.check_prereleases,
+        )
+        await page.launch_url(url)
 
     def _toast(self, message: str) -> None:
         if self._page is not None:

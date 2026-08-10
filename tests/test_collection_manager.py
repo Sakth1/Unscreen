@@ -213,7 +213,12 @@ class TestHealthMonitor:
         cm._running = True
 
         monitor = asyncio.create_task(cm._run_health_monitor(interval=0.01))
-        await asyncio.sleep(0.03)
+        # Poll instead of sleeping a fixed window: setting _running=False before
+        # the first tick would make the monitor break out with zero checks run.
+        for _ in range(200):
+            if cm._storage.check_integrity.call_count:
+                break
+            await asyncio.sleep(0.01)
         cm._running = False
         try:
             await monitor
@@ -221,7 +226,7 @@ class TestHealthMonitor:
             pass
 
         # The health monitor calls check_integrity + auto_vacuum on the real
-        # storage; the interval is 0.01 so at least one cycle runs in 0.03 s.
+        # storage; the interval is 0.01 so at least one cycle runs quickly.
         cm._storage.check_integrity.assert_called()  # type: ignore  # Storage is a Mock at test time
         cm._storage.auto_vacuum.assert_called()  # type: ignore
 

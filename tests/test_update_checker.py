@@ -19,6 +19,7 @@ from core.update_checker import (
     _api_request,
     _select_asset,
 )
+from utils.constants import RELEASES_PAGE_URL
 from utils.versions import (
     get_current_version,
 )
@@ -223,6 +224,85 @@ def test_check_prereleases_off_with_only_prereleases_returns_none():
     releases = [_release("9.9.9-dev.1", prerelease=True)]
     with patch("core.update_checker._api_request", return_value=releases):
         assert checker.check_for_update() is None
+
+
+def test_latest_release_url_stable_skips_newer_prerelease():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [
+        _release(
+            "0.4.7",
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.7",
+        ),
+        _release(
+            "0.4.8-dev.1",
+            prerelease=True,
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.8-dev.1",
+        ),
+    ]
+    with patch("core.update_checker._api_request", return_value=releases):
+        url = checker.latest_release_url(include_prereleases=False)
+    assert url == "https://github.com/Sakth1/Unscreen/releases/tag/v0.4.7"
+
+
+def test_latest_release_url_prereleases_picks_newest_prerelease():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [
+        _release(
+            "0.4.7",
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.7",
+        ),
+        _release(
+            "0.4.8-dev.1",
+            prerelease=True,
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.8-dev.1",
+        ),
+    ]
+    with patch("core.update_checker._api_request", return_value=releases):
+        url = checker.latest_release_url(include_prereleases=True)
+    assert url == "https://github.com/Sakth1/Unscreen/releases/tag/v0.4.8-dev.1"
+
+
+def test_latest_release_url_prereleases_still_prefers_newer_stable():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [
+        _release(
+            "0.4.9-dev.1",
+            prerelease=True,
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.9-dev.1",
+        ),
+        _release(
+            "0.4.9",
+            html_url="https://github.com/Sakth1/Unscreen/releases/tag/v0.4.9",
+        ),
+    ]
+    with patch("core.update_checker._api_request", return_value=releases):
+        url = checker.latest_release_url(include_prereleases=True)
+    assert url == "https://github.com/Sakth1/Unscreen/releases/tag/v0.4.9"
+
+
+def test_latest_release_url_falls_back_without_releases():
+    checker = UpdateChecker(current_version="0.4.2")
+    with patch("core.update_checker._api_request", return_value=[]):
+        assert checker.latest_release_url() == RELEASES_PAGE_URL
+    with patch("core.update_checker._api_request", return_value=None):
+        assert checker.latest_release_url(include_prereleases=True) == RELEASES_PAGE_URL
+
+
+def test_latest_release_url_falls_back_when_api_fails():
+    checker = UpdateChecker(current_version="0.4.2")
+    with patch.object(
+        checker,
+        "_fetch_releases",
+        side_effect=UpdateCheckError("boom"),
+    ):
+        assert checker.latest_release_url(include_prereleases=True) == RELEASES_PAGE_URL
+
+
+def test_latest_release_url_falls_back_without_html_url():
+    checker = UpdateChecker(current_version="0.4.2")
+    releases = [_release("0.4.7", html_url="")]
+    with patch("core.update_checker._api_request", return_value=releases):
+        assert checker.latest_release_url() == RELEASES_PAGE_URL
 
 
 def test_check_skips_drafts_and_unparsable_tags():
@@ -575,24 +655,27 @@ def test_apply_android_falls_back_to_file_uri_before_api_24(tmp_path):
 
     assert outcome.result == ApplyResult.APPLIED
     classes["androidx.core.content.FileProvider"].getUriForFile.assert_not_called()
-    uri, mime = classes["android.content.Intent"].return_value.setDataAndType.call_args.args
+    uri, mime = classes[
+        "android.content.Intent"
+    ].return_value.setDataAndType.call_args.args
     assert mime == "application/vnd.android.package-archive"
     assert uri == classes["android.net.Uri"].fromFile.return_value
     flags = {
         call.args[0]
-        for call in classes["android.content.Intent"].return_value.addFlags.call_args_list
+        for call in classes[
+            "android.content.Intent"
+        ].return_value.addFlags.call_args_list
     }
     assert flags == {classes["android.content.Intent"].FLAG_ACTIVITY_NEW_TASK}
-    assert (
-        classes["android.content.Intent"].FLAG_GRANT_READ_URI_PERMISSION
-        not in flags
-    )
+    assert classes["android.content.Intent"].FLAG_GRANT_READ_URI_PERMISSION not in flags
     assert activity.mActivity.startActivity.called
     assert not apk.exists()
 
 
 def test_apply_android_opens_unknown_sources_settings_when_not_allowed(tmp_path):
-    jnius, activity, real_files, classes = _android_bridge(sdk_int=34, can_install=False)
+    jnius, activity, real_files, classes = _android_bridge(
+        sdk_int=34, can_install=False
+    )
     checker = UpdateChecker(current_version="0.4.2")
     apk = tmp_path / "0.4.2.apk"
     apk.write_bytes(b"x")
@@ -612,9 +695,7 @@ def test_apply_android_opens_unknown_sources_settings_when_not_allowed(tmp_path)
     classes["android.net.Uri"].parse.assert_called_once_with(
         "package:com.mycompany.unscreen"
     )
-    assert (
-        classes["android.content.Intent"].return_value.setDataAndType.call_count == 0
-    )
+    assert classes["android.content.Intent"].return_value.setDataAndType.call_count == 0
     assert activity.mActivity.startActivity.called
     assert apk.exists()
 

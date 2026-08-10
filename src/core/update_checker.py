@@ -238,6 +238,23 @@ class UpdateChecker:
             if include_prereleases is None
             else include_prereleases
         )
+        release = self._newest_release(include_pre)
+        if release is None:
+            logger.info(
+                "No release matches the update channel (current %s)",
+                self._current_version,
+            )
+            return None
+
+        update = self._build_update_info(release)
+        if compare_versions(update.version, self._current_version) <= 0:
+            logger.info("No update available (current %s)", self._current_version)
+            return None
+        logger.info("Update available: %s -> %s", self._current_version, update.version)
+        return update
+
+    def _newest_release(self, include_prereleases: bool) -> dict | None:
+        """Return the newest non-draft release matching the channel."""
         releases = self._fetch_releases()
         if not releases:
             return None
@@ -248,17 +265,13 @@ class UpdateChecker:
             and not release.get("draft")
             and parse_version(release["tag_name"]) is not None
         ]
-        if not include_pre:
+        if not include_prereleases:
             candidates = [
                 release for release in candidates if not release.get("prerelease")
             ]
         if not candidates:
-            logger.info(
-                "No release matches the update channel (current %s)",
-                self._current_version,
-            )
             return None
-        release = max(
+        return max(
             candidates,
             key=cmp_to_key(
                 lambda left, right: compare_versions(
@@ -267,12 +280,22 @@ class UpdateChecker:
             ),
         )
 
-        update = self._build_update_info(release)
-        if compare_versions(update.version, self._current_version) <= 0:
-            logger.info("No update available (current %s)", self._current_version)
-            return None
-        logger.info("Update available: %s -> %s", self._current_version, update.version)
-        return update
+    def latest_release_url(self, include_prereleases: bool = False) -> str:
+        """Resolve the newest release page matching the channel.
+
+        GitHub only shortcuts the latest stable release (``/releases/latest``);
+        the newest prerelease has to be looked up via the API. Falls back to
+        :data:`RELEASES_PAGE_URL` when nothing matches or the API is
+        unreachable.
+        """
+        try:
+            release = self._newest_release(include_prereleases)
+        except UpdateCheckError as exc:
+            logger.warning("Could not resolve the latest release page: %s", exc)
+            return RELEASES_PAGE_URL
+        if release is None:
+            return RELEASES_PAGE_URL
+        return release.get("html_url") or RELEASES_PAGE_URL
 
     def _fetch_releases(self) -> list[dict] | None:
         """Fetch the release list; ``None`` when the repository has no releases."""
@@ -287,8 +310,11 @@ class UpdateChecker:
             raise UpdateCheckError(f"Could not reach GitHub API: {error}") from error
         except json.JSONDecodeError as error:
             raise UpdateCheckError("GitHub API returned invalid JSON") from error
+        if isinstance(payload, dict):
+            return [payload]
         if not isinstance(payload, list):
-            payload = [payload]
+            logger.warning("Unexpected releases payload: %r", type(payload).__name__)
+            return []
         return payload
 
     def _build_update_info(self, release: dict) -> UpdateInfo:
@@ -474,9 +500,7 @@ class UpdateChecker:
                 uri = Uri.fromFile(File(str(apk)))
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
             intent = Intent(Intent.ACTION_VIEW)
-            intent.setDataAndType(
-                uri, "application/vnd.android.package-archive"
-            )
+            intent.setDataAndType(uri, "application/vnd.android.package-archive")
             intent.addFlags(flags)
             activity.startActivity(intent)
         except Exception:
