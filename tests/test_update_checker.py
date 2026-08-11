@@ -726,9 +726,7 @@ def test_download_logs_step_attributes(tmp_path, caplog):
             return_value=_FakeResponse([b"abc", b"def"]),
         ),
     ):
-        checker.download(
-            _update(asset_size=6, digest=None), destination_dir=tmp_path
-        )
+        checker.download(_update(asset_size=6, digest=None), destination_dir=tmp_path)
     assert "Download start" in caplog.text
     assert "asset=0.4.2-setup.exe" in caplog.text
     assert "expected_bytes=6" in caplog.text

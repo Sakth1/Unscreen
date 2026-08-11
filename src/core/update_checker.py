@@ -548,10 +548,8 @@ class UpdateChecker:
             return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
         if BuildVersion.SDK_INT >= 26:
             try:
-                can_install = (
-                    activity.getPackageManager().canRequestPackageInstalls(
-                        activity.getPackageName()
-                    )
+                can_install = activity.getPackageManager().canRequestPackageInstalls(
+                    activity.getPackageName()
                 )
                 logger.info(
                     "Unknown sources check: package=%s sdk=%s can_request_package_installs=%s",
