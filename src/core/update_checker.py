@@ -25,6 +25,7 @@ from utils.versions import (
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 64 * 1024
+_LOG_PROGRESS_INTERVAL = 10 * 1024 * 1024
 
 _API_VERSION_HEADER = "2022-11-28"
 
@@ -354,6 +355,16 @@ class UpdateChecker:
         directory.mkdir(parents=True, exist_ok=True)
         destination = directory / update.asset_name
 
+        logger.info(
+            "Download start: to=%s asset=%s url=%s dest=%s expected_bytes=%s timeout=%s",
+            update.version,
+            update.asset_name,
+            update.asset_url,
+            destination,
+            update.asset_size,
+            self._timeout,
+        )
+
         request = urllib.request.Request(
             update.asset_url,
             headers={"User-Agent": f"Unscreen-updater/{get_current_version()}"},
@@ -365,12 +376,30 @@ class UpdateChecker:
                 urllib.request.urlopen(request, timeout=self._timeout) as response,
                 destination.open("wb") as fp,
             ):
+                response_headers = getattr(response, "headers", None) or {}
+                logger.info(
+                    "Download response: status=%s content_length=%s content_type=%s final_url=%s",
+                    getattr(response, "status", None),
+                    response_headers.get("Content-Length"),
+                    response_headers.get("Content-Type"),
+                    getattr(response, "geturl", lambda: None)(),
+                )
                 while True:
                     chunk = response.read(CHUNK_SIZE)
                     if not chunk:
                         break
                     fp.write(chunk)
                     downloaded += len(chunk)
+                    if (
+                        downloaded > 0
+                        and downloaded % _LOG_PROGRESS_INTERVAL < CHUNK_SIZE
+                    ):
+                        logger.debug(
+                            "Download progress: asset=%s bytes=%s expected=%s",
+                            update.asset_name,
+                            downloaded,
+                            total,
+                        )
                     if progress is not None:
                         progress(downloaded, total)
         except (urllib.error.URLError, TimeoutError, OSError) as error:
@@ -382,6 +411,15 @@ class UpdateChecker:
         if total is not None and downloaded != total:
             remove_file(destination)
             raise DownloadError(f"Incomplete download: {downloaded} of {total} bytes")
+        logger.info(
+            "Download finished: asset=%s path=%s downloaded=%s expected=%s disk_size=%s digest=%s",
+            update.asset_name,
+            destination,
+            downloaded,
+            total,
+            destination.stat().st_size if destination.is_file() else -1,
+            "present" if update.asset_digest else "absent",
+        )
         self._verify_digest(destination, update.asset_digest)
         return destination
 
@@ -389,12 +427,24 @@ class UpdateChecker:
         if not expected:
             logger.warning("No sha256 digest for %s; skipping verification", path.name)
             return
+        logger.info(
+            "Verifying sha256: path=%s size=%s expected=%s...",
+            path,
+            path.stat().st_size if path.is_file() else -1,
+            expected[:16],
+        )
         hasher = hashlib.sha256()
         with path.open("rb") as fp:
             for chunk in iter(lambda: fp.read(CHUNK_SIZE), b""):
                 hasher.update(chunk)
-        if hasher.hexdigest() != expected:
-            logger.error("sha256 mismatch for %s", path)
+        actual = hasher.hexdigest()
+        if actual != expected:
+            logger.error(
+                "sha256 mismatch for %s: expected=%s actual=%s",
+                path,
+                expected,
+                actual,
+            )
             remove_file(path)
             raise DigestMismatchError(
                 f"Downloaded {path.name} failed sha256 verification"
@@ -422,6 +472,14 @@ class UpdateChecker:
                 "Cannot apply an update when running from source; run the packaged app"
             )
         system = platform.system()
+        logger.info(
+            "Apply update: to=%s installer=%s system=%s android=%s packaged=%s",
+            update.version,
+            installer_path,
+            system,
+            is_android(),
+            is_packaged(),
+        )
         if system == "Windows":
             return self._apply_windows(installer_path, extra_args)
         if is_android():
@@ -447,6 +505,12 @@ class UpdateChecker:
 
     def _apply_android(self, installer_path: str | os.PathLike) -> ApplyOutcome:
         apk = Path(installer_path)
+        logger.info(
+            "Android apply start: apk=%s exists=%s size=%s",
+            apk,
+            apk.is_file(),
+            apk.stat().st_size if apk.is_file() else -1,
+        )
         if not apk.is_file():
             raise ApplyError(f"APK not found: {apk}")
         try:
@@ -456,27 +520,47 @@ class UpdateChecker:
             return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
         try:
             Intent = autoclass("android.content.Intent")
+            logger.info("jnius bridge loaded: %s", "android.content.Intent")
             Uri = autoclass("android.net.Uri")
+            logger.info("jnius bridge loaded: %s", "android.net.Uri")
             File = autoclass("java.io.File")
+            logger.info("jnius bridge loaded: %s", "java.io.File")
             Settings = autoclass("android.provider.Settings")
+            logger.info("jnius bridge loaded: %s", "android.provider.Settings")
             BuildVersion = autoclass("android.os.Build$VERSION")
+            logger.info("jnius bridge loaded: %s", "android.os.Build$VERSION")
             FileProvider = autoclass("androidx.core.content.FileProvider")
+            logger.info("jnius bridge loaded: %s", "androidx.core.content.FileProvider")
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            logger.info("jnius bridge loaded: %s", "org.kivy.android.PythonActivity")
             activity = PythonActivity.mActivity
+            logger.info(
+                "Android install bridge ready: activity=%s package=%s sdk=%s",
+                activity,
+                activity.getPackageName() if activity is not None else None,
+                BuildVersion.SDK_INT if activity is not None else None,
+            )
         except Exception:
             logger.exception(
-                "Android install bridge unavailable; manual install required"
+                "Android install bridge unavailable; manual install required (apk=%s)",
+                apk,
             )
             return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
         if BuildVersion.SDK_INT >= 26:
             try:
-                if not (
-                    activity.getPackageManager().canRequestPackageInstalls(
-                        activity.getPackageName()
-                    )
-                ):
+                can_install = activity.getPackageManager().canRequestPackageInstalls(
+                    activity.getPackageName()
+                )
+                logger.info(
+                    "Unknown sources check: package=%s sdk=%s can_request_package_installs=%s",
+                    activity.getPackageName(),
+                    BuildVersion.SDK_INT,
+                    can_install,
+                )
+                if not can_install:
                     logger.info(
-                        "Unknown sources not allowed; opening install-source settings"
+                        "Unknown sources not allowed; opening install-source settings: package=%s",
+                        activity.getPackageName(),
                     )
                     intent = Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES)
                     intent.setData(Uri.parse(f"package:{activity.getPackageName()}"))
@@ -484,27 +568,55 @@ class UpdateChecker:
                     activity.startActivity(intent)
                     return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
             except Exception:
-                logger.exception("Failed to check unknown-source permission")
+                logger.exception(
+                    "Failed to check unknown-source permission: package=%s sdk=%s",
+                    activity.getPackageName(),
+                    BuildVersion.SDK_INT,
+                )
+        package = activity.getPackageName()
+        authority = f"{package}.provider"
         try:
+            logger.info(
+                "Preparing install intent: apk=%s package=%s authority=%s sdk=%s",
+                apk,
+                package,
+                authority,
+                BuildVersion.SDK_INT,
+            )
             if BuildVersion.SDK_INT >= 24:
                 uri = FileProvider.getUriForFile(
                     activity,
-                    f"{activity.getPackageName()}.provider",
+                    authority,
                     File(str(apk)),
                 )
                 flags = (
                     Intent.FLAG_ACTIVITY_NEW_TASK
                     | Intent.FLAG_GRANT_READ_URI_PERMISSION
                 )
+                logger.info("FileProvider URI obtained: uri=%s flags=%s", uri, flags)
             else:
                 uri = Uri.fromFile(File(str(apk)))
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                logger.info("File URI obtained: uri=%s flags=%s", uri, flags)
             intent = Intent(Intent.ACTION_VIEW)
             intent.setDataAndType(uri, "application/vnd.android.package-archive")
             intent.addFlags(flags)
+            logger.info(
+                "Launching APK install intent: action=%s type=%s uri=%s flags=%s",
+                Intent.ACTION_VIEW,
+                "application/vnd.android.package-archive",
+                uri,
+                flags,
+            )
             activity.startActivity(intent)
         except Exception:
-            logger.exception("APK install intent failed; manual install required")
+            logger.exception(
+                "APK install intent failed; manual install required (apk=%s package=%s authority=%s sdk=%s)",
+                apk,
+                package,
+                authority,
+                BuildVersion.SDK_INT,
+            )
             return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
         remove_file(apk)
         logger.info("Triggered APK install for %s", apk)

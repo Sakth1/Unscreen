@@ -1,6 +1,7 @@
 import hashlib
 import importlib.metadata
 import json
+import logging
 import sys
 import types
 import urllib.error
@@ -711,3 +712,110 @@ def test_apply_unsupported_platform_is_not_applicable(tmp_path):
     ):
         outcome = checker.apply(_update(), installer)
     assert outcome.result == ApplyResult.NOT_APPLICABLE
+
+
+# ── download/apply step logging ────────────────────────────────────────────
+
+
+def test_download_logs_step_attributes(tmp_path, caplog):
+    checker = UpdateChecker(current_version="0.4.2")
+    with (
+        caplog.at_level(logging.INFO, logger="core.update_checker"),
+        patch(
+            "core.update_checker.urllib.request.urlopen",
+            return_value=_FakeResponse([b"abc", b"def"]),
+        ),
+    ):
+        checker.download(_update(asset_size=6, digest=None), destination_dir=tmp_path)
+    assert "Download start" in caplog.text
+    assert "asset=0.4.2-setup.exe" in caplog.text
+    assert "expected_bytes=6" in caplog.text
+    assert "Download response" in caplog.text
+    assert "Download finished" in caplog.text
+    assert "downloaded=6" in caplog.text
+
+
+def test_apply_android_bridge_failure_logs_attributes(tmp_path, caplog):
+    checker = UpdateChecker(current_version="0.4.2")
+    apk = tmp_path / "0.4.2.apk"
+    apk.write_bytes(b"x")
+
+    jnius = types.ModuleType("jnius")
+    loaded: list[str] = []
+
+    def failing_autoclass(name: str):
+        loaded.append(name)
+        if name == "androidx.core.content.FileProvider":
+            raise RuntimeError("ClassNotFoundException: FileProvider")
+        if name == "org.kivy.android.PythonActivity":
+            return types.SimpleNamespace(mActivity=None)
+        return MagicMock()
+
+    jnius.autoclass = failing_autoclass
+    with (
+        caplog.at_level(logging.INFO, logger="core.update_checker"),
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Android"),
+        patch.dict(sys.modules, {"jnius": jnius}),
+    ):
+        outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+
+    assert outcome.result == ApplyResult.MANUAL_REQUIRED
+    assert apk.exists()
+    assert "Android apply start" in caplog.text
+    assert f"apk={apk}" in caplog.text
+    assert "jnius bridge loaded: android.content.Intent" in caplog.text
+    assert "Android install bridge unavailable" in caplog.text
+
+
+def test_apply_android_intent_failure_logs_attributes(tmp_path, caplog):
+    checker = UpdateChecker(current_version="0.4.2")
+    apk = tmp_path / "0.4.2.apk"
+    apk.write_bytes(b"x")
+
+    activity = MagicMock()
+    activity.mActivity.getPackageName.return_value = "com.mycompany.unscreen"
+    activity.mActivity.getPackageManager.return_value = MagicMock()
+    file_provider = MagicMock()
+    file_provider.getUriForFile.side_effect = RuntimeError(
+        "Failed to find configured root"
+    )
+
+    jnius = types.ModuleType("jnius")
+
+    def autoclass(name: str):
+        if name == "org.kivy.android.PythonActivity":
+            return activity
+        if name == "android.os.Build$VERSION":
+            return types.SimpleNamespace(SDK_INT=34)
+        if name == "androidx.core.content.FileProvider":
+            return file_provider
+        if name == "java.io.File":
+            return lambda path: path
+        if name == "android.content.Intent":
+            intent_class = MagicMock()
+            intent_class.FLAG_ACTIVITY_NEW_TASK = 0x10000000
+            intent_class.FLAG_GRANT_READ_URI_PERMISSION = 0x00000001
+            intent_class.ACTION_VIEW = 0x00010000
+            return intent_class
+        return MagicMock()
+
+    jnius.autoclass = autoclass
+    with (
+        caplog.at_level(logging.INFO, logger="core.update_checker"),
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Android"),
+        patch.dict(sys.modules, {"jnius": jnius}),
+    ):
+        outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+
+    assert outcome.result == ApplyResult.MANUAL_REQUIRED
+    assert apk.exists()
+    assert "Android install bridge ready" in caplog.text
+    assert "Preparing install intent" in caplog.text
+    assert "authority=com.mycompany.unscreen.provider" in caplog.text
+    assert "package=com.mycompany.unscreen" in caplog.text
+    assert "sdk=34" in caplog.text
+    assert "APK install intent failed" in caplog.text
