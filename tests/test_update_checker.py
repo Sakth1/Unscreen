@@ -766,6 +766,10 @@ def test_apply_android_bridge_failure_logs_attributes(tmp_path, caplog):
     assert "Android apply start" in caplog.text
     assert f"apk={apk}" in caplog.text
     assert "jnius bridge loaded: android.content.Intent" in caplog.text
+    assert (
+        "jnius bridge class failed to load: androidx.core.content.FileProvider"
+        in caplog.text
+    )
     assert "Android install bridge unavailable" in caplog.text
 
 
@@ -819,3 +823,98 @@ def test_apply_android_intent_failure_logs_attributes(tmp_path, caplog):
     assert "package=com.mycompany.unscreen" in caplog.text
     assert "sdk=34" in caplog.text
     assert "APK install intent failed" in caplog.text
+
+
+def test_apply_android_uses_env_host_class_when_set(tmp_path, monkeypatch, caplog):
+    monkeypatch.setenv(
+        "MAIN_ACTIVITY_HOST_CLASS_NAME",
+        "com.flet.serious_python_android.PythonActivity",
+    )
+    monkeypatch.setattr("utils.android._activity", None)
+
+    jnius = types.ModuleType("jnius")
+    activity = MagicMock()
+    activity.mActivity.getPackageName.return_value = "com.mycompany.unscreen"
+    activity.mActivity.getPackageManager.return_value = MagicMock()
+    intent_class = MagicMock()
+    intent_class.FLAG_ACTIVITY_NEW_TASK = 0x10000000
+    intent_class.FLAG_GRANT_READ_URI_PERMISSION = 0x00000001
+    intent_class.ACTION_VIEW = 0x00010000
+    autoclass_calls: list[str] = []
+
+    def fake_autoclass(name: str):
+        autoclass_calls.append(name)
+        if name == "com.flet.serious_python_android.PythonActivity":
+            return activity
+        if name == "org.kivy.android.PythonActivity":
+            raise AssertionError(
+                "kivy host class must not load when env host class set"
+            )
+        if name == "android.os.Build$VERSION":
+            return types.SimpleNamespace(SDK_INT=34)
+        if name == "java.io.File":
+            return lambda path: str(path)
+        if name == "android.content.Intent":
+            return intent_class
+        return MagicMock()
+
+    jnius.autoclass = fake_autoclass
+    checker = UpdateChecker(current_version="0.4.2")
+    apk = tmp_path / "0.4.2.apk"
+    apk.write_bytes(b"x")
+    with (
+        caplog.at_level(logging.INFO, logger="core.update_checker"),
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Android"),
+        patch.dict(sys.modules, {"jnius": jnius}),
+    ):
+        outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+
+    assert outcome.result == ApplyResult.APPLIED
+    assert "com.flet.serious_python_android.PythonActivity" in autoclass_calls
+    assert "org.kivy.android.PythonActivity" not in autoclass_calls
+    assert (
+        "Android activity host class env: com.flet.serious_python_android.PythonActivity"
+        in caplog.text
+    )
+    assert activity.mActivity.startActivity.called
+
+
+def test_apply_android_env_host_class_failure_skips_kivy_fallback(
+    tmp_path, monkeypatch, caplog
+):
+    monkeypatch.setenv(
+        "MAIN_ACTIVITY_HOST_CLASS_NAME",
+        "com.flet.serious_python_android.PythonActivity",
+    )
+    monkeypatch.setattr("utils.android._activity", None)
+
+    jnius = types.ModuleType("jnius")
+    autoclass_calls: list[str] = []
+
+    def fake_autoclass(name: str):
+        autoclass_calls.append(name)
+        if name == "com.flet.serious_python_android.PythonActivity":
+            raise RuntimeError("ClassNotFoundException")
+        if name == "org.kivy.android.PythonActivity":
+            raise AssertionError("kivy fallback must not run when env host class set")
+        return MagicMock()
+
+    jnius.autoclass = fake_autoclass
+    checker = UpdateChecker(current_version="0.4.2")
+    apk = tmp_path / "0.4.2.apk"
+    apk.write_bytes(b"x")
+    with (
+        caplog.at_level(logging.INFO, logger="core.update_checker"),
+        patch("core.update_checker.is_packaged", return_value=True),
+        patch("core.update_checker.is_android", return_value=True),
+        patch("core.update_checker.platform.system", return_value="Android"),
+        patch.dict(sys.modules, {"jnius": jnius}),
+    ):
+        outcome = checker.apply(_update(asset_name="0.4.2.apk"), apk)
+
+    assert outcome.result == ApplyResult.MANUAL_REQUIRED
+    assert apk.exists()
+    assert "Android activity unavailable" in caplog.text
+    assert "org.kivy.android.PythonActivity" not in autoclass_calls

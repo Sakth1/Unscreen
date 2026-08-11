@@ -10,8 +10,9 @@ from dataclasses import dataclass
 from enum import Enum
 from functools import cmp_to_key
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
+from utils.android import get_activity
 from utils.constants import RELEASES_PAGE_URL, RELEASES_REPO_URL
 from utils.files import remove_file
 from utils.platform import is_android, is_packaged
@@ -518,34 +519,65 @@ class UpdateChecker:
         except ImportError:
             logger.warning("pyjnius not available; manual APK install required")
             return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
+        loaded_classes: dict[str, Any] = {}
         try:
-            Intent = autoclass("android.content.Intent")
-            logger.info("jnius bridge loaded: %s", "android.content.Intent")
-            Uri = autoclass("android.net.Uri")
-            logger.info("jnius bridge loaded: %s", "android.net.Uri")
-            File = autoclass("java.io.File")
-            logger.info("jnius bridge loaded: %s", "java.io.File")
-            Settings = autoclass("android.provider.Settings")
-            logger.info("jnius bridge loaded: %s", "android.provider.Settings")
-            BuildVersion = autoclass("android.os.Build$VERSION")
-            logger.info("jnius bridge loaded: %s", "android.os.Build$VERSION")
-            FileProvider = autoclass("androidx.core.content.FileProvider")
-            logger.info("jnius bridge loaded: %s", "androidx.core.content.FileProvider")
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            logger.info("jnius bridge loaded: %s", "org.kivy.android.PythonActivity")
-            activity = PythonActivity.mActivity
-            logger.info(
-                "Android install bridge ready: activity=%s package=%s sdk=%s",
-                activity,
-                activity.getPackageName() if activity is not None else None,
-                BuildVersion.SDK_INT if activity is not None else None,
-            )
+            for class_name in (
+                "android.content.Intent",
+                "android.net.Uri",
+                "java.io.File",
+                "android.provider.Settings",
+                "android.os.Build$VERSION",
+                "androidx.core.content.FileProvider",
+            ):
+                try:
+                    loaded_classes[class_name] = autoclass(class_name)
+                except Exception:
+                    logger.exception(
+                        "jnius bridge class failed to load: %s", class_name
+                    )
+                    raise
+                logger.info("jnius bridge loaded: %s", class_name)
         except Exception:
             logger.exception(
                 "Android install bridge unavailable; manual install required (apk=%s)",
                 apk,
             )
             return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
+        Intent = loaded_classes["android.content.Intent"]
+        Uri = loaded_classes["android.net.Uri"]
+        File = loaded_classes["java.io.File"]
+        Settings = loaded_classes["android.provider.Settings"]
+        BuildVersion = loaded_classes["android.os.Build$VERSION"]
+        FileProvider = loaded_classes["androidx.core.content.FileProvider"]
+        host_class = os.environ.get("MAIN_ACTIVITY_HOST_CLASS_NAME")
+        logger.info(
+            "Android activity host class env: %s",
+            host_class if host_class else "<unset>",
+        )
+        activity = get_activity()
+        if activity is None and not host_class:
+            logger.info(
+                "jnius bridge loaded (fallback host): org.kivy.android.PythonActivity"
+            )
+            try:
+                activity = autoclass("org.kivy.android.PythonActivity").mActivity
+            except Exception:
+                logger.exception(
+                    "jnius bridge class failed to load: org.kivy.android.PythonActivity"
+                )
+                activity = None
+        if activity is None:
+            logger.warning(
+                "Android activity unavailable; manual APK install required (apk=%s)",
+                apk,
+            )
+            return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
+        logger.info(
+            "Android install bridge ready: activity=%s package=%s sdk=%s",
+            activity,
+            activity.getPackageName(),
+            BuildVersion.SDK_INT,
+        )
         if BuildVersion.SDK_INT >= 26:
             try:
                 can_install = activity.getPackageManager().canRequestPackageInstalls(
