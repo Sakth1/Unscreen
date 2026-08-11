@@ -116,6 +116,18 @@ def show_update_dialog(
     canceled = {"flag": False}
 
     def _begin_install(_event) -> None:
+        logger.info(
+            "Update install requested: from=%s to=%s asset=%s size=%s url=%s "
+            "android=%s packaged=%s tempdir=%s",
+            installed_version,
+            update.version,
+            update.asset_name,
+            update.asset_size,
+            update.asset_url,
+            is_android(),
+            is_packaged(),
+            tempfile.gettempdir(),
+        )
         set_busy("Preparing…", allow_cancel=True)
         page.run_task(_run_download_and_install)
 
@@ -158,10 +170,28 @@ def show_update_dialog(
             toast("Download failed")
             return
 
+        apk_path = Path(installer_path)
+        logger.info(
+            "Update download completed: to=%s path=%s exists=%s disk_size=%s expected=%s",
+            update.version,
+            apk_path,
+            apk_path.is_file(),
+            apk_path.stat().st_size if apk_path.is_file() else -1,
+            update.asset_size,
+        )
         set_busy("Verifying…")
         await asyncio.sleep(0.05)
         if is_android():
-            _install_android(installer_path, update)
+            try:
+                _install_android(apk_path, update)
+            except Exception:
+                logger.exception(
+                    "Unexpected error during Android update install: to=%s apk=%s",
+                    update.version,
+                    apk_path,
+                )
+                close()
+                toast("Update install failed — see app log")
             return
         _install_windows(installer_path, update)
 
@@ -190,11 +220,24 @@ def show_update_dialog(
             on_install_launched()
 
     def _install_android(installer_path, update: UpdateInfo) -> None:
+        apk = Path(installer_path)
+        logger.info(
+            "Android install start: to=%s apk=%s exists=%s size=%s",
+            update.version,
+            apk,
+            apk.is_file(),
+            apk.stat().st_size if apk.is_file() else -1,
+        )
         updater = Updater()
         try:
-            outcome = updater.apply_update(update, installer_path, relaunch=False)
+            outcome = updater.apply_update(update, apk, relaunch=False)
         except UpdateApplyError as exc:
-            logger.error("Failed to start APK install: %s", exc)
+            logger.error(
+                "Failed to start APK install: to=%s apk=%s error=%s",
+                update.version,
+                apk,
+                exc,
+            )
             close()
             toast("Could not start the installer")
             return
