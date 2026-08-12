@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -30,6 +31,52 @@ _UPDATE_POLL_INTERVAL = 0.15
 
 class _DownloadCanceled(Exception):
     pass
+
+
+class _UpdateProgress(ft.Column):
+    """Progress bar and status text for update downloads.
+
+    Shows a determinate bar with downloaded/total MB and transfer speed
+    while downloading, and an indeterminate bar while busy. Uses
+    :func:`safe_update` so it can also be unit-tested detached from a page.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(tight=True)
+        self._bar = ft.ProgressBar(value=0)
+        self._status = ft.Text("", size=12)
+        self.controls = [self._bar, self._status]
+        self._last_downloaded = 0
+        self._last_time = 0.0
+
+    def set_busy(self, message: str) -> None:
+        self._bar.value = None
+        self._status.value = message
+        safe_update(self)
+
+    def set_progress(self, downloaded: int, total: int | None) -> None:
+        now = time.monotonic()
+        speed = 0.0
+        if self._last_time and downloaded > self._last_downloaded:
+            speed_mb = (downloaded - self._last_downloaded) / 1_000_000
+            elapsed = now - self._last_time
+            if elapsed > 0:
+                speed = speed_mb / elapsed
+        self._last_downloaded = downloaded
+        self._last_time = now
+        speed_text = f" ({speed:.1f} MB/s)" if speed else ""
+        if total:
+            self._bar.value = min(1.0, downloaded / total)
+            self._status.value = (
+                f"Downloading… {downloaded / 1_000_000:.1f} / "
+                f"{total / 1_000_000:.1f} MB{speed_text}"
+            )
+        else:
+            self._bar.value = None
+            self._status.value = (
+                f"Downloading… {downloaded / 1_000_000:.1f} MB{speed_text}"
+            )
+        safe_update(self)
 
 
 def _info_row(label: str, value: str) -> ft.Row:
@@ -82,9 +129,7 @@ def show_update_dialog(
         tight=True,
         spacing=8,
     )
-    progress_bar = ft.ProgressBar(value=0)
-    status_text = ft.Text("", size=12)
-    progress_col = ft.Column(controls=[progress_bar, status_text], tight=True)
+    progress_col = _UpdateProgress()
 
     dialog = ft.AlertDialog(
         modal=True,
@@ -99,19 +144,13 @@ def show_update_dialog(
         show_snack_bar(page, message)
 
     def set_busy(message: str, allow_cancel: bool = False) -> None:
-        progress_bar.value = None
-        status_text.value = message
+        progress_col.set_busy(message)
         for control in dialog.actions:
             control.disabled = not (allow_cancel and control is cancel_btn)
         dialog.update()
 
     def set_progress(downloaded: int, total: int | None) -> None:
-        if total:
-            progress_bar.value = min(1.0, downloaded / total)
-            status_text.value = f"Downloading… {downloaded / 1_000_000:.1f} / {total / 1_000_000:.1f} MB"
-        else:
-            progress_bar.value = None
-            status_text.value = f"Downloading… {downloaded / 1_000_000:.1f} MB"
+        progress_col.set_progress(downloaded, total)
 
     canceled = {"flag": False}
 
