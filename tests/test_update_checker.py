@@ -638,7 +638,8 @@ def test_apply_android_uses_file_provider_on_modern_api(tmp_path):
     }
     classes["android.net.Uri"].fromFile.assert_not_called()
     assert activity.mActivity.startActivity.called
-    assert not apk.exists()
+    activity.mActivity.getPackageManager.return_value.canRequestPackageInstalls.assert_called_once_with()
+    assert apk.exists()
 
 
 def test_apply_android_falls_back_to_file_uri_before_api_24(tmp_path):
@@ -670,7 +671,7 @@ def test_apply_android_falls_back_to_file_uri_before_api_24(tmp_path):
     assert flags == {classes["android.content.Intent"].FLAG_ACTIVITY_NEW_TASK}
     assert classes["android.content.Intent"].FLAG_GRANT_READ_URI_PERMISSION not in flags
     assert activity.mActivity.startActivity.called
-    assert not apk.exists()
+    assert apk.exists()
 
 
 def test_apply_android_opens_unknown_sources_settings_when_not_allowed(tmp_path):
@@ -696,6 +697,7 @@ def test_apply_android_opens_unknown_sources_settings_when_not_allowed(tmp_path)
     classes["android.net.Uri"].parse.assert_called_once_with(
         "package:com.mycompany.unscreen"
     )
+    activity.mActivity.getPackageManager.return_value.canRequestPackageInstalls.assert_called_once_with()
     assert classes["android.content.Intent"].return_value.setDataAndType.call_count == 0
     assert activity.mActivity.startActivity.called
     assert apk.exists()
