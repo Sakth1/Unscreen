@@ -580,9 +580,7 @@ class UpdateChecker:
         )
         if BuildVersion.SDK_INT >= 26:
             try:
-                can_install = activity.getPackageManager().canRequestPackageInstalls(
-                    activity.getPackageName()
-                )
+                can_install = activity.getPackageManager().canRequestPackageInstalls()
                 logger.info(
                     "Unknown sources check: package=%s sdk=%s can_request_package_installs=%s",
                     activity.getPackageName(),
@@ -650,8 +648,10 @@ class UpdateChecker:
                 BuildVersion.SDK_INT,
             )
             return ApplyOutcome(ApplyResult.MANUAL_REQUIRED)
-        remove_file(apk)
-        logger.info("Triggered APK install for %s", apk)
+        logger.info(
+            "Triggered APK install for %s (APK kept in cache for the system installer)",
+            apk,
+        )
         return ApplyOutcome(ApplyResult.APPLIED)
 
 
