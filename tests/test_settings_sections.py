@@ -554,6 +554,44 @@ class TestAppInfoSection:
         assert section._config.check_prereleases is False
 
 
+class TestUpdateProgress:
+    def test_set_progress_sets_bar_and_text(self):
+        from UI.screens.settings.app_info import _UpdateProgress
+
+        progress = _UpdateProgress()
+        progress.set_progress(10_000_000, 60_000_000)
+        assert progress._bar.value == pytest.approx(10 / 60)
+        assert "Downloading" in progress._status.value
+        assert "10.0 / 60.0 MB" in progress._status.value
+
+    def test_set_progress_without_total_is_indeterminate(self):
+        from UI.screens.settings.app_info import _UpdateProgress
+
+        progress = _UpdateProgress()
+        progress.set_progress(5_000_000, None)
+        assert progress._bar.value is None
+        assert "5.0 MB" in progress._status.value
+
+    def test_set_busy_is_indeterminate(self):
+        from UI.screens.settings.app_info import _UpdateProgress
+
+        progress = _UpdateProgress()
+        progress.set_busy("Preparing…")
+        assert progress._bar.value is None
+        assert progress._status.value == "Preparing…"
+
+    def test_set_progress_shows_speed_on_second_call(self):
+        import time
+
+        from UI.screens.settings.app_info import _UpdateProgress
+
+        progress = _UpdateProgress()
+        progress._last_time = time.monotonic() - 2.0
+        progress._last_downloaded = 10_000_000
+        progress.set_progress(20_000_000, 60_000_000)
+        assert "5.0 MB/s" in progress._status.value
+
+
 class TestSettingsScreen:
     def test_builds_three_sections(self, tmp_path):
         from UI.screens.settings_screen import Settings
