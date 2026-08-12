@@ -1,6 +1,6 @@
 [project]
 name = "unscreen"
-version = "0.4.7-dev6"
+version = "0.4.8"
 description = "Cross-device app usage timeline tracker"
 readme = "README.md"
 requires-python = ">=3.10"
