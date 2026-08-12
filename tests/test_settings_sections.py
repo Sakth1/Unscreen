@@ -586,10 +586,10 @@ class TestUpdateProgress:
         from UI.screens.settings.app_info import _UpdateProgress
 
         progress = _UpdateProgress()
-        progress.set_progress(10_000_000, 60_000_000)
-        time.sleep(0.01)
+        progress._last_time = time.monotonic() - 2.0
+        progress._last_downloaded = 10_000_000
         progress.set_progress(20_000_000, 60_000_000)
-        assert "MB/s" in progress._status.value
+        assert "5.0 MB/s" in progress._status.value
 
 
 class TestSettingsScreen:
