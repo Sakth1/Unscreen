@@ -434,6 +434,31 @@ class Storage:
         ).fetchone()
         return float(row[0])
 
+    def count_events(
+        self,
+        event_type: str | None = None,
+        since: float | None = None,
+        until: float | None = None,
+    ) -> int:
+        """Count raw events matching the filters (cheap COUNT(*))."""
+        filters: list[str] = []
+        params: list = []
+
+        if event_type:
+            filters.append("event_type = ?")
+            params.append(event_type)
+        if since is not None:
+            filters.append("timestamp >= ?")
+            params.append(since)
+        if until is not None:
+            filters.append("timestamp <= ?")
+            params.append(until)
+
+        sql = "SELECT COUNT(*) FROM raw_events"
+        if filters:
+            sql += " WHERE " + " AND ".join(filters)
+        return int(self._conn.execute(sql, params).fetchone()[0])
+
     def get_latest_battery(self) -> dict | None:
         row = self._conn.execute(
             "SELECT payload FROM raw_events WHERE event_type = ? ORDER BY timestamp DESC LIMIT 1",

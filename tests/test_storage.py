@@ -237,6 +237,44 @@ class TestWriteEvent:
         results = in_memory_db.get_raw_events(desc=True)
         assert results[0]["timestamp"] > results[1]["timestamp"]
 
+    def test_count_events_all(self, in_memory_db):
+        in_memory_db.write_event(
+            event_type="foreground_transition",
+            timestamp=1000.0,
+            payload={},
+            source="fg",
+        )
+        in_memory_db.write_event(
+            event_type="power_change",
+            timestamp=1100.0,
+            payload={},
+            source="pwr",
+        )
+        assert in_memory_db.count_events() == 2
+
+    def test_count_events_filtered(self, in_memory_db):
+        in_memory_db.write_event(
+            event_type="foreground_transition",
+            timestamp=1000.0,
+            payload={},
+            source="fg",
+        )
+        in_memory_db.write_event(
+            event_type="power_change",
+            timestamp=1100.0,
+            payload={},
+            source="pwr",
+        )
+        in_memory_db.write_event(
+            event_type="power_change",
+            timestamp=1200.0,
+            payload={},
+            source="pwr",
+        )
+        assert in_memory_db.count_events(event_type="power_change") == 2
+        assert in_memory_db.count_events(since=1050.0, until=1150.0) == 1
+        assert in_memory_db.count_events(event_type="nope") == 0
+
     def test_get_raw_events_limit(self, in_memory_db):
         for i in range(10):
             in_memory_db.write_event(

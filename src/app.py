@@ -23,6 +23,7 @@ from UI.custom.secondary_navigation_panel import (
     SecondaryNavigationDestination,
     SecondaryNavigationPanel,
 )
+from UI.custom.status_bar import CollectionStatusBar
 from UI.dialogs import show_permission_dialog
 from UI.layout.layout_resolver import app_layout_resolver
 from UI.routing import RouteManager
@@ -124,6 +125,7 @@ class App:
         self.populated_options_inline = False
         self._inline_picker_view: object = None
         self._inline_picker_content: object = None
+        self.status_bar = CollectionStatusBar()
         self.shell = ft.Row(expand=True, controls=[self.content_container])
 
         self.section_routes: dict[str, list[str]] = {
@@ -172,9 +174,12 @@ class App:
         self.page.on_route_change = self.route_manager.handle_route_change
         self.page.on_resize = self._handle_page_resize
         self.page.on_media_change = self._handle_media_change
-        self.page.add(self.shell)
+        self.page.add(
+            ft.Column(expand=True, spacing=0, controls=[self.shell, self.status_bar])
+        )
 
         self._initiate()
+        self.status_bar.start_refresh(self.page)
         self.route_manager.navigate(self.route_manager.current_route)
 
     def _set_window_icon(self) -> None:
@@ -204,6 +209,11 @@ class App:
         if self.config.auto_update_enabled:
             self.page.run_task(self._startup_update_check)
 
+        # Boot the collection loop. start() registers the watchers and
+        # auto-pauses when collection_enabled is off (saved config), so
+        # a fresh launch always collects when tracking is enabled.
+        self.page.run_task(self._start_collection)
+
         if detect_os() == OSType.ANDROID:
             from core.collectors.android.usage_stats import check_usage_stats_permission
 
@@ -232,6 +242,12 @@ class App:
             is_mobile=self._is_mobile,
         )
         self._apply_layout(self.layout)
+
+    async def _start_collection(self) -> None:
+        try:
+            await self.collection_manager.start()
+        except Exception:
+            logger.exception("Collection failed to start at boot")
 
     async def _startup_update_check(self) -> None:
         """Silently look for a newer release; offer the update when found."""
