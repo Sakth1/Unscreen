@@ -82,8 +82,17 @@ class TestTimeUtils:
         assert start <= now_ms
         assert (now_ms - start) < 24 * 60 * 60 * 1000
 
-    def test_fmt_timestamp_formats_utc(self):
-        assert fmt_timestamp(0.0) == "1970-01-01 00:00:00.000000"
+    def test_fmt_timestamp_uses_local_time_with_offset(self):
+        from datetime import datetime
+
+        ts = 1700000000.0
+        expected = (
+            datetime.fromtimestamp(ts).astimezone().strftime("%Y-%m-%d %H:%M:%S.%f%z")
+        )
+        assert fmt_timestamp(ts) == expected
+
+    def test_fmt_timestamp_falls_back_to_utc_on_localize_error(self):
+        assert fmt_timestamp(0.0).endswith("+0000")
 
 
 class TestFiles:

@@ -97,11 +97,17 @@ class TestPrepareRawEvents:
         assert parsed[0]["source"] == "android_app_usage"
 
     def test_timestamp_formatted(self):
+        from datetime import datetime
+
         rows = [_RAW_ROW]
         _, data = ExportService.prepare_raw_events(rows)
         parsed = json.loads(data.decode("utf-8"))
-        assert parsed[0]["timestamp"] == "2023-11-14 22:13:20.000000"
-        assert parsed[0]["collected_at"] == "2023-11-14 22:13:30.000000"
+        assert parsed[0]["timestamp"] == datetime.fromtimestamp(
+            1700000000.0
+        ).astimezone().strftime("%Y-%m-%d %H:%M:%S.%f%z")
+        assert parsed[0]["collected_at"] == datetime.fromtimestamp(
+            1700000010.0
+        ).astimezone().strftime("%Y-%m-%d %H:%M:%S.%f%z")
 
     def test_unicode(self):
         rows = [{**_RAW_ROW, "payload": {"name": "José café"}}]
