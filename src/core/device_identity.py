@@ -4,7 +4,7 @@ import uuid
 from functools import lru_cache
 
 from utils.paths import get_data_dir
-from utils.platform import get_winreg
+from utils.win32 import get_winreg
 
 
 def _machine_guid() -> str | None:

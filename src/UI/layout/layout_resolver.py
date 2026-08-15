@@ -1,5 +1,17 @@
 import logging
 
+from UI.layout.models import (
+    AppLayout,
+    DrawerMetrics,
+    NavBarMetrics,
+    NavigationPattern,
+    Orientation,
+    ScreenFormFactor,
+    SecondaryDrawerMetrics,
+    SecondaryNavigationPattern,
+    WindowHeightClass,
+    WindowWidthClass,
+)
 from utils.constants import (
     COMPACT_BREAKPOINT,
     COMPACT_HEIGHT_BREAKPOINT,
@@ -12,18 +24,6 @@ from utils.constants import (
     MIN_PAGE_HEIGHT,
     MIN_PAGE_WIDTH,
     MINI_RAIL_WIDTH,
-)
-from utils.models import (
-    AppLayout,
-    DrawerMetrics,
-    NavBarMetrics,
-    NavigationPattern,
-    Orientation,
-    ScreenFormFactor,
-    SecondaryDrawerMetrics,
-    SecondaryNavigationPattern,
-    WindowHeightClass,
-    WindowWidthClass,
 )
 
 logger = logging.getLogger(__name__)

@@ -12,7 +12,7 @@ from core.state.app_state import (
 )
 from core.update_checker import UpdateInfo
 from UI.layout.layout_resolver import app_layout_resolver
-from utils.models import OSType
+from utils.platform import OSType
 
 
 class TestSingleton:
@@ -240,8 +240,8 @@ class TestCollectionManagerWiring:
 
 class TestRouteManagerWiring:
     def test_navigate_updates_state(self):
+        from UI.layout.models import NavigationDestination
         from UI.routing import RouteManager
-        from utils.models import NavigationDestination
 
         page = MagicMock()
         container = MagicMock()

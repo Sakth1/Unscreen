@@ -1,6 +1,6 @@
 from typing import Optional, Protocol
 
-from utils.models import Tick, WatcherConfig
+from core.models import Tick, WatcherConfig
 
 
 class Watcher(Protocol):

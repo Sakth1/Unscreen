@@ -13,9 +13,11 @@ from unittest.mock import MagicMock, patch
 
 from sweep_helpers import mock_page
 
+from core.event_bus import TickBus
+from core.models import Tick
 from core.storage import Storage
-from utils.bus import TickBus
-from utils.models import OSType, ScreenFormFactor, Tick
+from UI.layout.models import ScreenFormFactor
+from utils.platform import OSType
 
 
 class TestStartupUpdateCheck:

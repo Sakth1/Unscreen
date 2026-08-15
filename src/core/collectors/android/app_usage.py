@@ -4,7 +4,7 @@ from core.collectors.android.usage_stats import (
     check_usage_stats_permission,
     query_usage_stats,
 )
-from utils.models import Tick, WatcherConfig
+from core.models import Tick, WatcherConfig
 from utils.time_utils import day_start_ms, get_current_time_ms
 
 logger = logging.getLogger(__name__)

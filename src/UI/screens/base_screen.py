@@ -3,7 +3,7 @@ import logging
 import flet as ft
 
 from core.state.app_state import KEY_LAYOUT, get_app_state
-from utils.models import AppLayout, NavigationDestination
+from UI.layout.models import AppLayout, NavigationDestination
 
 logger = logging.getLogger(__name__)
 

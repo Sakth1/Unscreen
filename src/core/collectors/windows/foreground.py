@@ -4,8 +4,8 @@ import time
 from core.collectors.windows.browser import analyze as analyze_browser
 from core.collectors.windows.window import WindowAnalyzer
 from core.config_manager import ConfigManager
+from core.models import Tick, WatcherConfig
 from core.storage import Storage
-from utils.models import Tick, WatcherConfig
 
 logger = logging.getLogger(__name__)
 

@@ -16,10 +16,11 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from core import device_identity
+from core.models import Tick
 from core.update_checker import UpdateInfo
-from utils.models import AppLayout, OSType, Tick
+from UI.layout.models import AppLayout
 from utils.paths import get_data_dir
-from utils.platform import detect_os, is_packaged
+from utils.platform import OSType, detect_os, is_packaged
 from utils.versions import get_current_version
 
 logger = logging.getLogger(__name__)

@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 from app import App
-from utils.models import ScreenFormFactor
+from UI.layout.models import ScreenFormFactor
 
 FLUTTER_EXE = os.environ.get("FLET_TEST_FLUTTER_EXE") or shutil.which("flutter")
 FLUTTER_APP_DIR = os.environ.get("FLET_TEST_FLUTTER_APP_DIR") or (

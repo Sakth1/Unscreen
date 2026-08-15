@@ -2,7 +2,7 @@ from unittest.mock import patch
 
 from core.collectors.android.afk import AndroidAfkWatcher
 from core.collectors.windows.afk import AfkWatcher
-from utils.models import WatcherConfig
+from core.models import WatcherConfig
 
 
 class TestAfkParity:

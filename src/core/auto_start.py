@@ -2,7 +2,7 @@ import logging
 import sys
 from pathlib import Path
 
-from utils.platform import get_winreg
+from utils.win32 import get_winreg
 
 winreg = get_winreg()
 

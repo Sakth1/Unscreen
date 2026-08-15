@@ -27,6 +27,13 @@ from UI.custom.secondary_navigation_panel import (
 from UI.custom.status_bar import CollectionStatusBar
 from UI.dialogs import show_permission_dialog
 from UI.layout.layout_resolver import app_layout_resolver
+from UI.layout.models import (
+    AppLayout,
+    NavigationDestination,
+    NavigationPattern,
+    SecondaryNavigationChangeData,
+    SecondaryNavigationPattern,
+)
 from UI.routing import RouteManager
 from UI.screens.analytics_screen import Analytics
 from UI.screens.base_screen import BaseScreen
@@ -34,6 +41,7 @@ from UI.screens.dashboard_screen import Dashboard
 from UI.screens.settings.settings_card import SettingsCard
 from UI.screens.settings_screen import Settings
 from UI.screens.timeline_screen import Timeline
+from UI.theme import apply_accent_theme
 from utils.constants import (
     ASSET_DIR,
     DEFAULT_PAGE_HEIGHT,
@@ -43,18 +51,10 @@ from utils.constants import (
     MOBILE_DEFAULT_HEIGHT,
     MOBILE_DEFAULT_WIDTH,
 )
-from utils.flet_helpers import apply_accent_theme
-from utils.models import (
-    AppLayout,
-    NavigationDestination,
-    NavigationPattern,
-    OSType,
-    SecondaryNavigationChangeData,
-    SecondaryNavigationPattern,
-)
 from utils.paths import get_data_dir
-from utils.platform import acquire_instance_mutex, detect_os, is_packaged
+from utils.platform import OSType, detect_os, is_packaged
 from utils.versions import get_current_version
+from utils.win32 import acquire_instance_mutex
 
 logging.basicConfig(
     level=logging.INFO,

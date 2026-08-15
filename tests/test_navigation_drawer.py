@@ -55,7 +55,7 @@ class TestDrawerConstruction:
 
 class TestDrawerChangeEventData:
     def test_change_event_carries_index_and_label(self):
-        from utils.models import NavigationChangeData
+        from UI.layout.models import NavigationChangeData
 
         first = CustomNavigationDrawerDestination(icon="HOME", label="Dashboard")
         second = CustomNavigationDrawerDestination(icon="TIMELINE", label="Timeline")

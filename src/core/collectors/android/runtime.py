@@ -6,7 +6,7 @@ from core.collectors.android.foreground import AndroidForegroundWatcher
 from core.collectors.android.power import AndroidPowerWatcher
 from core.collectors.base import Watcher
 from core.config_manager import ConfigManager
-from utils.models import WatcherConfig
+from core.models import WatcherConfig
 
 logger = logging.getLogger(__name__)
 

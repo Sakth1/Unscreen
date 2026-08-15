@@ -27,7 +27,7 @@ class TestFixturesAvailable:
     def test_mock_tick_bus(self, mock_tick_bus):
         import asyncio
 
-        from utils.models import Tick
+        from core.models import Tick
 
         tick = Tick()
         asyncio.run(mock_tick_bus.send(tick))

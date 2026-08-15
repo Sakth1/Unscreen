@@ -2,9 +2,9 @@ import asyncio
 
 import pytest
 
+from core.event_bus import TickBus
+from core.models import Tick, WatcherConfig
 from core.scheduler import Scheduler
-from utils.bus import TickBus
-from utils.models import Tick, WatcherConfig
 
 
 class _CountingWatcher:

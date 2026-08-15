@@ -10,8 +10,8 @@ import pytest
 # in any test is immediately caught, not just in the compat gate.
 warnings.filterwarnings("error", category=DeprecationWarning)
 
-from utils.bus import TickBus  # noqa: E402
-from utils.models import Tick, WatcherConfig  # noqa: E402
+from core.event_bus import TickBus  # noqa: E402
+from core.models import Tick, WatcherConfig  # noqa: E402
 
 
 class _FakeHTTPResponse(io.BytesIO):

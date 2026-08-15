@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from utils.platform import get_winreg
+from utils.win32 import get_winreg
 
 logger = logging.getLogger(__name__)
 

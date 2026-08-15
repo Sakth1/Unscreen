@@ -19,14 +19,13 @@ from sweep_helpers import mock_page
 
 from core.application.collection_manager import CollectionManager, _EventBridge
 from core.config_manager import ConfigManager
-from utils.models import (
+from core.models import Tick, WatcherConfig
+from UI.layout.models import (
     NavigationPattern,
-    OSType,
     ScreenFormFactor,
     SecondaryNavigationPattern,
-    Tick,
-    WatcherConfig,
 )
+from utils.platform import OSType
 
 _EVENT_TIMEOUT_S = 5.0
 
@@ -478,7 +477,7 @@ class TestAppHeadlessBoot:
 
     def test_secondary_panel_select_navigates_to_section(self):
         from app import App
-        from utils.models import SecondaryNavigationChangeData
+        from UI.layout.models import SecondaryNavigationChangeData
 
         app = App(self._page(1280, 800))
         app.route_manager.navigate("/settings")

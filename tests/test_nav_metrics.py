@@ -15,7 +15,7 @@ from UI.layout.layout_resolver import (
     resolve_drawer_metrics,
     resolve_navbar_metrics,
 )
-from utils.models import NavigationPattern, WindowHeightClass
+from UI.layout.models import NavigationPattern, WindowHeightClass
 
 
 class TestDrawerMetrics:

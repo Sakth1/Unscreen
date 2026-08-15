@@ -2,9 +2,8 @@ import re
 import sys
 
 from utils.files import remove_file, timestamped_filename
-from utils.models import OSType
 from utils.net import extract_domain, is_trackable_url, normalize_url
-from utils.platform import detect_os, is_android, is_packaged
+from utils.platform import OSType, detect_os, is_android, is_packaged
 from utils.time_utils import day_start_ms, fmt_timestamp, get_current_time_ms
 from utils.versions import compare_versions, normalize_version
 
@@ -114,7 +113,7 @@ class TestInstanceMutex:
     def test_not_available_off_windows(self):
         from unittest.mock import patch
 
-        from utils.platform import acquire_instance_mutex
+        from utils.win32 import acquire_instance_mutex
 
         with patch("utils.platform.sys.platform", "linux"):
             assert acquire_instance_mutex("AnyName") is None
@@ -128,7 +127,7 @@ class TestInstanceMutex:
         if sys.platform != "win32":
             pytest.skip("Windows named mutex is not available here")
 
-        from utils.platform import acquire_instance_mutex
+        from utils.win32 import acquire_instance_mutex
 
         first = acquire_instance_mutex("UnscreenTestMutex_1")
         second = acquire_instance_mutex("UnscreenTestMutex_1")

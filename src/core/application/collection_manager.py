@@ -4,12 +4,12 @@ import logging
 from collections.abc import Callable
 
 from core.config_manager import ConfigManager
+from core.event_bus import TickBus
+from core.models import Tick
 from core.scheduler import Scheduler
 from core.state.app_state import get_app_state
 from core.storage import Storage
-from utils.bus import TickBus
-from utils.models import OSType, Tick
-from utils.platform import detect_os
+from utils.platform import OSType, detect_os
 from utils.time_utils import utc_timestamp
 
 logger = logging.getLogger(__name__)

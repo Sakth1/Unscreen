@@ -2,7 +2,7 @@ import ctypes
 import logging
 
 from core.config_manager import ConfigManager
-from utils.models import Tick, WatcherConfig
+from core.models import Tick, WatcherConfig
 
 logger = logging.getLogger(__name__)
 

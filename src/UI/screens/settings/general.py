@@ -8,9 +8,9 @@ from core.config_manager import ConfigManager
 from core.theme import theme_is_valid, theme_label, theme_names
 from UI.screens.settings.builders import section_scaffold
 from UI.screens.settings.settings_card import SettingsCard
-from utils.flet_helpers import apply_accent_theme, show_snack_bar
-from utils.models import OSType
-from utils.platform import detect_os
+from UI.theme import apply_accent_theme
+from utils.flet_helpers import show_snack_bar
+from utils.platform import OSType, detect_os
 
 logger = logging.getLogger(__name__)
 
