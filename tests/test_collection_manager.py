@@ -93,6 +93,7 @@ class TestPauseResume:
         cm._auto_paused = True
         await cm.stop()
         assert not cm._auto_paused
+        cm._storage.sync_durable_backup.assert_called_once_with(force=True)
 
     async def test_on_pause_changed_callback_fired(self, tmp_path):
         from core.application.collection_manager import CollectionManager

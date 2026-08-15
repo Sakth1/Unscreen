@@ -24,6 +24,16 @@ the canonical paths above, so data never lands in flet's
 `%APPDATA%\Flet\unscreen\data` folder. `UNSCREEN_DATA_DIR` is the only
 override and it is app-specific.
 
+Android durability (v0.4.10-dev3): the app keeps a consistent copy of
+`data.db` in the user-visible MediaStore Downloads collection at
+`Download/Unscreen-data-backup/unscreen.db` (API 29+, no permissions).
+That copy survives an app uninstall and is user-deletable, mirroring the
+Windows contract; Auto Backup is also enabled explicitly
+(`allowBackup="true"` in the manifest) for silent cloud restore after
+reinstall. The copy is synced on collection stop and hourly, and is
+restored into a fresh data dir when present (same-install only). See
+`docs/research/android-data-persistence.md` and ADR-0003.
+
 `utils/paths.py:get_data_dir()` is the single source of truth. SQLite runs
 in **WAL mode** (`journal_mode=WAL`, `synchronous=NORMAL`) — you will see
 `data.db-wal` and `data.db-shm` sidecars while the app is running; querying

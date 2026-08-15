@@ -176,6 +176,7 @@ class CollectionManager:
                 await self._screen_monitor_task
             self._screen_monitor_task = None
         await self._scheduler.stop()
+        self._storage.sync_durable_backup(force=True)
         if self._runtime:
             self._runtime.shutdown()
         self._bus.unsubscribe(self._event_bridge)
@@ -265,6 +266,7 @@ class CollectionManager:
             vac = self._storage.auto_vacuum()
             if vac["vacuumed"]:
                 logger.info("Periodic auto-vacuum completed: %s", vac["message"])
+            self._storage.sync_durable_backup()
 
     @property
     def bus(self) -> TickBus:
