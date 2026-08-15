@@ -29,7 +29,7 @@ class RawEvent:
     device_id: str = ""
     platform: str = ""
     event_type: str = ""
-    timestamp: float = 0.0
-    collected_at: float = 0.0
+    timestamp: int = 0
+    collected_at: int = 0
     payload: dict[str, Any] = field(default_factory=dict)
     source: str = ""
