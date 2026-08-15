@@ -553,10 +553,82 @@ class TestAppInfoSection:
         section._on_prerelease_changed(_event(False))
         assert section._config.check_prereleases is False
 
+    def test_update_chip_hidden_by_default(self, tmp_path):
+        from core.state.app_state import reset_app_state
+        from UI.screens.settings.app_info import AppInfo
+
+        reset_app_state()
+        section = AppInfo(config=_config(tmp_path))
+        assert section._update_chip.visible is False
+
+    def test_update_chip_shows_available_update(self, tmp_path):
+        from core.state.app_state import UpdateStatus, get_app_state, reset_app_state
+        from core.update_checker import UpdateInfo
+        from UI.screens.settings.app_info import AppInfo
+
+        reset_app_state()
+        info = UpdateInfo(
+            version="0.4.9",
+            tag_name="v0.4.9",
+            release_notes="## What's Changed",
+            published_at="",
+            prerelease=False,
+            html_url="https://github.com/sakth1/Unscreen/releases",
+        )
+        state = get_app_state()
+        state.set_update_info(info)
+        state.set_update_status(UpdateStatus.AVAILABLE)
+
+        section = AppInfo(config=_config(tmp_path))
+        assert section._update_chip.visible is True
+        assert section._chip_text.value == "Update v0.4.9 available"
+
+    def test_update_chip_shows_checking_and_failed(self, tmp_path):
+        from core.state.app_state import UpdateStatus, get_app_state, reset_app_state
+        from UI.screens.settings.app_info import AppInfo
+
+        reset_app_state()
+        get_app_state().set_update_status(UpdateStatus.CHECKING)
+        section = AppInfo(config=_config(tmp_path))
+        assert section._chip_text.value == "Checking…"
+
+        get_app_state().set_update_status(UpdateStatus.FAILED)
+        assert section._chip_text.value == "Check failed"
+        get_app_state().set_update_status(UpdateStatus.IDLE)
+        assert section._update_chip.visible is False
+
+    def test_run_update_check_records_state(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from core.state.app_state import UpdateStatus, get_app_state, reset_app_state
+        from core.update_checker import UpdateInfo
+        from UI.screens.settings.app_info import AppInfo
+
+        checker = MagicMock()
+        checker.check_for_update.return_value = UpdateInfo(
+            version="0.4.9",
+            tag_name="v0.4.9",
+            release_notes="",
+            published_at="",
+            prerelease=False,
+            html_url="https://example.com/releases",
+        )
+        monkeypatch.setattr(
+            "UI.screens.settings.app_info.UpdateChecker", lambda: checker
+        )
+
+        reset_app_state()
+        section = AppInfo(config=_config(tmp_path))
+        asyncio.run(section._run_update_check())
+        state = get_app_state()
+        assert state.update_status is UpdateStatus.AVAILABLE
+        assert state.update_info is not None
+        assert state.update_info.version == "0.4.9"
+
 
 class TestUpdateProgress:
     def test_set_progress_sets_bar_and_text(self):
-        from UI.screens.settings.app_info import _UpdateProgress
+        from UI.components.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         progress.set_progress(10_000_000, 60_000_000)
@@ -565,7 +637,7 @@ class TestUpdateProgress:
         assert "10.0 / 60.0 MB" in progress._status.value
 
     def test_set_progress_without_total_is_indeterminate(self):
-        from UI.screens.settings.app_info import _UpdateProgress
+        from UI.components.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         progress.set_progress(5_000_000, None)
@@ -573,7 +645,7 @@ class TestUpdateProgress:
         assert "5.0 MB" in progress._status.value
 
     def test_set_busy_is_indeterminate(self):
-        from UI.screens.settings.app_info import _UpdateProgress
+        from UI.components.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         progress.set_busy("Preparing…")
@@ -583,13 +655,21 @@ class TestUpdateProgress:
     def test_set_progress_shows_speed_on_second_call(self):
         import time
 
-        from UI.screens.settings.app_info import _UpdateProgress
+        from UI.components.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         progress._last_time = time.monotonic() - 2.0
         progress._last_downloaded = 10_000_000
         progress.set_progress(20_000_000, 60_000_000)
         assert "5.0 MB/s" in progress._status.value
+
+    def test_starts_hidden_and_becomes_visible(self):
+        from UI.components.update_dialog import _UpdateProgress
+
+        progress = _UpdateProgress()
+        assert progress.visible is False
+        progress.set_busy("Verifying…")
+        assert progress.visible is True
 
 
 class TestSettingsScreen:

@@ -10,7 +10,7 @@ from core.auto_start import enable as enable_auto_start
 from core.auto_start import is_enabled as is_auto_start_enabled
 from core.config_manager import ConfigManager
 from core.logging_setup import apply_root_level, get_log_path, setup_file_logging
-from core.state.app_state import get_app_state
+from core.state.app_state import UpdateStatus, get_app_state
 from core.update_checker import UpdateChecker
 from UI.custom.navigation_bar import (
     CustomNavigationBar,
@@ -276,8 +276,35 @@ class App:
             return
         if info is None:
             return
+        get_app_state().set_update_info(info)
+        get_app_state().set_update_status(UpdateStatus.AVAILABLE)
+        get_app_state().set_update_error(None)
+
+        size_mb = (
+            f"{(info.asset_size or 0) / 1_000_000:.1f} MB" if info.asset_size else ""
+        )
         snack = ft.SnackBar(
-            content=ft.Text(f"Update v{info.version} is available"),
+            content=ft.Row(
+                spacing=12,
+                controls=[
+                    ft.Icon(ft.Icons.SYSTEM_UPDATE_ALT, color=ft.Colors.PRIMARY),
+                    ft.Column(
+                        tight=True,
+                        spacing=2,
+                        controls=[
+                            ft.Text(
+                                f"Update v{info.version} is available",
+                                weight=ft.FontWeight.BOLD,
+                            ),
+                            ft.Text(
+                                size_mb or "A new version is ready to install",
+                                size=11,
+                                color=ft.Colors.ON_SURFACE_VARIANT,
+                            ),
+                        ],
+                    ),
+                ],
+            ),
             action="Update now",
             on_action=lambda _e: self._open_update_dialog(info),
             open=True,

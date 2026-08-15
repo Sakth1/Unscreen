@@ -1,82 +1,25 @@
 import asyncio
 import logging
-import tempfile
-import time
-from pathlib import Path
 from typing import Callable, Optional
 
 import flet as ft
 
 from core.config_manager import ConfigManager
-from core.update_checker import (
-    ApplyResult,
-    DownloadError,
-    UpdateChecker,
-    UpdateCheckError,
-    UpdateInfo,
+from core.state.app_state import (
+    KEY_UPDATE_STATUS,
+    UpdateStatus,
+    get_app_state,
 )
-from core.update_flow import UpdateApplyError, Updater, installer_extra_args
+from core.update_checker import UpdateChecker, UpdateCheckError
+from UI.components.update_dialog import show_update_dialog
 from UI.dialogs import show_alert_dialog
 from UI.screens.settings.builders import section_scaffold
 from UI.screens.settings.settings_card import SettingsCard
-from utils.files import remove_file
-from utils.flet_helpers import safe_pop_dialog, safe_update, show_snack_bar
+from utils.flet_helpers import show_snack_bar
 from utils.paths import get_data_dir
-from utils.platform import detect_os, is_android, is_packaged
+from utils.platform import detect_os
 
 logger = logging.getLogger(__name__)
-
-_UPDATE_POLL_INTERVAL = 0.15
-
-
-class _DownloadCanceled(Exception):
-    pass
-
-
-class _UpdateProgress(ft.Column):
-    """Progress bar and status text for update downloads.
-
-    Shows a determinate bar with downloaded/total MB and transfer speed
-    while downloading, and an indeterminate bar while busy. Uses
-    :func:`safe_update` so it can also be unit-tested detached from a page.
-    """
-
-    def __init__(self) -> None:
-        super().__init__(tight=True)
-        self._bar = ft.ProgressBar(value=0)
-        self._status = ft.Text("", size=12)
-        self.controls = [self._bar, self._status]
-        self._last_downloaded = 0
-        self._last_time = 0.0
-
-    def set_busy(self, message: str) -> None:
-        self._bar.value = None
-        self._status.value = message
-        safe_update(self)
-
-    def set_progress(self, downloaded: int, total: int | None) -> None:
-        now = time.monotonic()
-        speed = 0.0
-        if self._last_time and downloaded > self._last_downloaded:
-            speed_mb = (downloaded - self._last_downloaded) / 1_000_000
-            elapsed = now - self._last_time
-            if elapsed > 0:
-                speed = speed_mb / elapsed
-        self._last_downloaded = downloaded
-        self._last_time = now
-        speed_text = f" ({speed:.1f} MB/s)" if speed else ""
-        if total:
-            self._bar.value = min(1.0, downloaded / total)
-            self._status.value = (
-                f"Downloading… {downloaded / 1_000_000:.1f} / "
-                f"{total / 1_000_000:.1f} MB{speed_text}"
-            )
-        else:
-            self._bar.value = None
-            self._status.value = (
-                f"Downloading… {downloaded / 1_000_000:.1f} MB{speed_text}"
-            )
-        safe_update(self)
 
 
 def _info_row(label: str, value: str) -> ft.Row:
@@ -86,231 +29,6 @@ def _info_row(label: str, value: str) -> ft.Row:
             ft.Text(value, selectable=True, expand=True),
         ],
     )
-
-
-def show_update_dialog(
-    page: ft.Page,
-    update: UpdateInfo,
-    installed_version: str,
-    on_install_launched: Optional[Callable[[], None]] = None,
-) -> None:
-    """Modal update offer: notes, size, download-with-progress, install.
-
-    Windows hands the verified installer to the elevated setup flow
-    (:class:`core.update_flow.Updater`) and requests an app restart via
-    ``on_install_launched``. Android opens the APK through the system
-    installer. Manual-only releases (no auto-install asset) only get the
-    releases-page button.
-    """
-    installable = is_packaged() and not update.is_manual_only
-    notes = (update.release_notes or "No release notes provided.").strip()
-    size_mb = (
-        f"{(update.asset_size or 0) / 1_000_000:.1f} MB" if update.asset_size else "—"
-    )
-
-    title = ft.Text("Update available", weight=ft.FontWeight.BOLD)
-    details = ft.Column(
-        controls=[
-            ft.Text(f"Version {update.version} is available.", selectable=True),
-            ft.Text(f"Installed: {installed_version}", size=12),
-            ft.Container(
-                content=ft.Column(
-                    controls=[ft.Text(notes, size=12)],
-                    height=140,
-                    scroll=ft.ScrollMode.AUTO,
-                    spacing=0,
-                ),
-                padding=8,
-                border=ft.Border.all(1, ft.Colors.OUTLINE_VARIANT),
-                border_radius=8,
-            ),
-            ft.Text(f"Download size: {size_mb}", size=12),
-        ],
-        tight=True,
-        spacing=8,
-    )
-    progress_col = _UpdateProgress()
-
-    dialog = ft.AlertDialog(
-        modal=True,
-        title=title,
-        content=ft.Column(controls=[details, progress_col], tight=True),
-    )
-
-    def close() -> None:
-        safe_pop_dialog(page)
-
-    def toast(message: str) -> None:
-        show_snack_bar(page, message)
-
-    def set_busy(message: str, allow_cancel: bool = False) -> None:
-        progress_col.set_busy(message)
-        for control in dialog.actions:
-            control.disabled = not (allow_cancel and control is cancel_btn)
-        dialog.update()
-
-    def set_progress(downloaded: int, total: int | None) -> None:
-        progress_col.set_progress(downloaded, total)
-
-    canceled = {"flag": False}
-
-    def _begin_install(_event) -> None:
-        logger.info(
-            "Update install requested: from=%s to=%s asset=%s size=%s url=%s "
-            "android=%s packaged=%s tempdir=%s",
-            installed_version,
-            update.version,
-            update.asset_name,
-            update.asset_size,
-            update.asset_url,
-            is_android(),
-            is_packaged(),
-            tempfile.gettempdir(),
-        )
-        set_busy("Preparing…", allow_cancel=True)
-        page.run_task(_run_download_and_install)
-
-    async def _run_download_and_install() -> None:
-        checker = UpdateChecker()
-        progress: dict[str, object] = {"downloaded": 0, "total": None, "changed": False}
-
-        def on_progress(done: int, total: int | None) -> None:
-            progress["downloaded"] = done
-            progress["total"] = total
-            progress["changed"] = True
-            if canceled["flag"]:
-                raise _DownloadCanceled
-
-        download_task = asyncio.create_task(
-            asyncio.to_thread(checker.download, update, None, on_progress)
-        )
-        while not download_task.done():
-            await asyncio.sleep(_UPDATE_POLL_INTERVAL)
-            if progress["changed"]:
-                progress["changed"] = False
-                set_progress(progress["downloaded"], progress["total"])
-
-        try:
-            installer_path = await download_task
-        except _DownloadCanceled:
-            logger.info("Update download canceled by user")
-            remove_file(Path(tempfile.gettempdir()) / (update.asset_name or "update"))
-            close()
-            toast("Download canceled")
-            return
-        except DownloadError as exc:
-            logger.warning("Update download failed: %s", exc)
-            close()
-            toast("Download failed — check your connection")
-            return
-        except Exception:
-            logger.exception("Update download failed unexpectedly")
-            close()
-            toast("Download failed")
-            return
-
-        apk_path = Path(installer_path)
-        logger.info(
-            "Update download completed: to=%s path=%s exists=%s disk_size=%s expected=%s",
-            update.version,
-            apk_path,
-            apk_path.is_file(),
-            apk_path.stat().st_size if apk_path.is_file() else -1,
-            update.asset_size,
-        )
-        set_busy("Verifying…")
-        await asyncio.sleep(0.05)
-        if is_android():
-            try:
-                _install_android(apk_path, update)
-            except Exception:
-                logger.exception(
-                    "Unexpected error during Android update install: to=%s apk=%s",
-                    update.version,
-                    apk_path,
-                )
-                close()
-                toast("Update install failed — see app log")
-            return
-        _install_windows(installer_path, update)
-
-    def _install_windows(installer_path, update: UpdateInfo) -> None:
-        updater = Updater()
-        set_busy("Starting installer…")
-        try:
-            outcome = updater.apply_update(
-                update, installer_path, relaunch=True, extra_args=installer_extra_args()
-            )
-        except UpdateApplyError as exc:
-            logger.error("Failed to start installer: %s", exc)
-            close()
-            toast("Could not start the installer")
-            return
-        if outcome.result == ApplyResult.CANCELED:
-            close()
-            toast("Update canceled")
-            return
-        if outcome.result is not ApplyResult.APPLIED:
-            close()
-            toast("The installer could not be started")
-            return
-        close()
-        if on_install_launched is not None:
-            on_install_launched()
-
-    def _install_android(installer_path, update: UpdateInfo) -> None:
-        apk = Path(installer_path)
-        logger.info(
-            "Android install start: to=%s apk=%s exists=%s size=%s",
-            update.version,
-            apk,
-            apk.is_file(),
-            apk.stat().st_size if apk.is_file() else -1,
-        )
-        updater = Updater()
-        try:
-            outcome = updater.apply_update(update, apk, relaunch=False)
-        except UpdateApplyError as exc:
-            logger.error(
-                "Failed to start APK install: to=%s apk=%s error=%s",
-                update.version,
-                apk,
-                exc,
-            )
-            close()
-            toast("Could not start the installer")
-            return
-        close()
-        if outcome.result == ApplyResult.MANUAL_REQUIRED:
-            toast("Allow app installs from Android settings, then try again")
-        elif outcome.result == ApplyResult.APPLIED:
-            toast("Installer opened — follow the on-screen instructions")
-        else:
-            toast("The installer could not be started")
-
-    def _open_releases(_event) -> None:
-        close()
-        asyncio.create_task(page.launch_url(update.html_url))
-
-    def _later(_event) -> None:
-        canceled["flag"] = True
-        close()
-
-    install_btn = ft.FilledTonalButton(
-        "Download & install",
-        icon=ft.Icons.DOWNLOAD,
-        on_click=_begin_install,
-    )
-    cancel_btn = ft.TextButton("Cancel", on_click=_later)
-    releases_btn = ft.TextButton("Open releases page", on_click=_open_releases)
-    later_btn = ft.TextButton("Later", on_click=_later)
-
-    dialog.actions = (
-        [install_btn, cancel_btn] if installable else [releases_btn, later_btn]
-    )
-    dialog.actions_alignment = ft.MainAxisAlignment.END
-    page.show_dialog(dialog)
-    safe_update(page)
 
 
 class AppInfo(ft.Container):
@@ -358,12 +76,28 @@ class AppInfo(ft.Container):
             icon=ft.Icons.OPEN_IN_NEW,
             on_click=self._open_latest_release,
         )
+        self._chip_text = ft.Text(size=11, weight=ft.FontWeight.W_500)
+        self._update_chip = ft.Container(
+            content=self._chip_text,
+            padding=ft.padding.Padding.symmetric(horizontal=8, vertical=3),
+            border_radius=12,
+            visible=False,
+        )
 
         cards = [
             SettingsCard(
                 "Updates",
                 [
-                    ft.Text(f"Installed version: {self._version}"),
+                    ft.Row(
+                        wrap=True,
+                        run_spacing=4,
+                        spacing=8,
+                        vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                        controls=[
+                            ft.Text(f"Installed version: {self._version}"),
+                            self._update_chip,
+                        ],
+                    ),
                     self._auto_update_switch,
                     self._prerelease_switch,
                     ft.Row(
@@ -397,6 +131,33 @@ class AppInfo(ft.Container):
 
         self.content = section_scaffold("App info", cards, on_back=on_back)
 
+        get_app_state().on_change(KEY_UPDATE_STATUS, self._refresh_update_chip)
+        self._refresh_update_chip()
+
+    # ── Update status chip ─────────────────────────────────────────────────
+
+    def _refresh_update_chip(self, _key: str | None = None) -> None:
+        state = get_app_state()
+        if state.update_status is UpdateStatus.AVAILABLE and state.update_info:
+            self._chip_text.value = f"Update v{state.update_info.version} available"
+            self._chip_text.color = ft.Colors.ON_PRIMARY_CONTAINER
+            self._update_chip.bgcolor = ft.Colors.PRIMARY_CONTAINER
+            self._update_chip.visible = True
+        elif state.update_status is UpdateStatus.CHECKING:
+            self._chip_text.value = "Checking…"
+            self._chip_text.color = ft.Colors.ON_SECONDARY_CONTAINER
+            self._update_chip.bgcolor = ft.Colors.SECONDARY_CONTAINER
+            self._update_chip.visible = True
+        elif state.update_status is UpdateStatus.FAILED:
+            self._chip_text.value = "Check failed"
+            self._chip_text.color = ft.Colors.ON_ERROR_CONTAINER
+            self._update_chip.bgcolor = ft.Colors.ERROR_CONTAINER
+            self._update_chip.visible = True
+        else:
+            self._update_chip.visible = False
+        if self.parent is not None:
+            self.update()
+
     # ── Handlers ──────────────────────────────────────────────────────────
 
     def _on_auto_update_changed(self, event: ft.ControlEvent) -> None:
@@ -427,12 +188,17 @@ class AppInfo(ft.Container):
 
     async def _run_update_check(self) -> None:
         page = self._page
+        state = get_app_state()
+        state.set_update_status(UpdateStatus.CHECKING)
+        state.set_update_error(None)
         try:
             info = await asyncio.to_thread(
                 self._update_checker.check_for_update,
                 include_prereleases=self._config.check_prereleases,
             )
         except UpdateCheckError as exc:
+            state.set_update_status(UpdateStatus.FAILED)
+            state.set_update_error(str(exc))
             self._toast("Update check failed")
             if page is not None:
                 show_alert_dialog(page, "Update check failed", str(exc))
@@ -445,6 +211,8 @@ class AppInfo(ft.Container):
                 self._page.update()
 
         if info is None:
+            state.set_update_status(UpdateStatus.IDLE)
+            state.set_update_info(None)
             self._toast("You're up to date")
             if page is not None:
                 show_alert_dialog(
@@ -454,6 +222,8 @@ class AppInfo(ft.Container):
                 )
             return
 
+        state.set_update_info(info)
+        state.set_update_status(UpdateStatus.AVAILABLE)
         if page is not None:
             show_update_dialog(
                 page,
@@ -484,5 +254,6 @@ class AppInfo(ft.Container):
         """Refresh control values when the section becomes visible."""
         self._auto_update_switch.value = self._config.auto_update_enabled
         self._prerelease_switch.value = self._config.check_prereleases
+        self._refresh_update_chip()
         if self.parent is not None:
             self.update()
