@@ -17,15 +17,19 @@ dictionary-encoded event types/sources, `payload_hash` dedup identity,
 
 | Platform | Path |
 |---|---|
-| Windows | `%APPDATA%\Unscreen\data.db` |
+| Windows (installed) | `%APPDATA%\Unscreen\data.db` |
 | Android | `$HOME/Unscreen/data.db` or `/data/data/com.mycompany.unscreen/files/Unscreen/data.db` |
+| Dev (`flet run`) | `<project>/.flet/storage/data/data.db` (git-ignored) |
 | Override | `UNSCREEN_DATA_DIR` env var replaces the whole data dir (development/testing only) |
 
-Note (v0.4.10-dev2): flet's own `FLET_APP_STORAGE_DATA` env var is
-deliberately **ignored** by `get_data_dir()` — installed builds always use
-the canonical paths above, so data never lands in flet's
-`%APPDATA%\Flet\unscreen\data` folder. `UNSCREEN_DATA_DIR` is the only
-override and it is app-specific.
+Note (v0.4.10-dev3): flet's own `FLET_APP_STORAGE_DATA` env var is honored
+**only** in CLI dev mode (`flet run`), where it points at the project-local,
+git-ignored `.flet/storage/data` dir — dev runs never touch `%APPDATA%`.
+Installed builds set the same variable to the OS app-support dir, which is
+deliberately **ignored** so they always use the canonical paths above and
+data never lands in flet's `%APPDATA%\Flet\unscreen\data` folder.
+`UNSCREEN_DATA_DIR` is the only app-specific override and wins over all of
+the above.
 
 Android durability (v0.4.10-dev3): the app keeps a consistent copy of
 `data.db` in the user-visible MediaStore Downloads collection at
