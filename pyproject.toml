@@ -1,6 +1,6 @@
 [project]
 name = "unscreen"
-version = "0.4.10-dev2"
+version = "0.4.10-dev3"
 description = "Cross-device app usage timeline tracker"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -84,6 +84,7 @@ path = "src"
 [tool.flet.android]
 split_per_abi = true
 compile_packages = true
+manifest_application = { allowBackup = "true" }
 dependencies = [
     "flet>=0.86.2",
     "orjson>=3.11.9",

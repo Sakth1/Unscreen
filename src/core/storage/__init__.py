@@ -44,6 +44,13 @@ class Storage:
             os.makedirs(parent, exist_ok=True)
 
         self._path = path
+        self._durable_backup = None
+        if (
+            self._platform == "android"
+            and path != ":memory:"
+            and not os.path.exists(path)
+        ):
+            self._restore_durable_backup()
         try:
             self._conn = self._connect()
             self._run_migrations()
@@ -69,10 +76,15 @@ class Storage:
             logger.error("Could not read storage info: %s", exc)
             return
         size = os.path.getsize(self._path) if os.path.exists(self._path) else 0
+        durable = ""
+        if self._platform == "android":
+            from core.storage.android_durable import describe
+
+            durable = f" android_durable_backup={describe()}"
         logger.info(
             "Storage initialized: db=%s dir=%s UNSCREEN_DATA_DIR=%s "
             "platform=%s device_id=%s journal=%s user_version=%d "
-            "raw_events=%d size_bytes=%d",
+            "raw_events=%d size_bytes=%d%s",
             self._path,
             get_data_dir(),
             os.environ.get("UNSCREEN_DATA_DIR") or "unset",
@@ -82,7 +94,27 @@ class Storage:
             version,
             count,
             size,
+            durable,
         )
+
+    def _restore_durable_backup(self) -> None:
+        try:
+            from core.storage.android_durable import AndroidDurableBackup, describe
+
+            backup = AndroidDurableBackup(self._path)
+            if backup.is_available() and backup.restore_if_present():
+                logger.info("Restored durable Android backup from %s", describe())
+        except Exception:
+            logger.exception("Durable Android backup restore at startup failed")
+
+    def sync_durable_backup(self, force: bool = False) -> bool:
+        if self._platform != "android":
+            return False
+        if self._durable_backup is None:
+            from core.storage.android_durable import AndroidDurableBackup
+
+            self._durable_backup = AndroidDurableBackup(self._path)
+        return self._durable_backup.sync(force=force)
 
     @property
     def db_path(self) -> str:
