@@ -1,5 +1,6 @@
 """Tests for the update flow orchestration (watchdog, updater)."""
 
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -87,7 +88,26 @@ def test_updater_applies_and_arms_relaunch_on_windows():
         result = updater.apply_update(_update(), installer)
     assert result == outcome
     apply_mock.assert_called_once_with(_update(), installer, None)
-    write.assert_called_once_with(77, Path(r"C:\Program Files\Unscreen"))
+    write.assert_called_once_with(
+        77, Path(r"C:\Program Files\Unscreen") / Path(sys.executable).name
+    )
+    spawn.assert_called_once()
+
+
+def test_updater_relaunch_falls_back_to_sys_executable():
+    updater = Updater()
+    outcome = ApplyOutcome(ApplyResult.APPLIED, process_id=88)
+    with (
+        patch.object(updater.checker, "apply", return_value=outcome),
+        patch("core.update_flow._is_windows", return_value=True),
+        patch("core.update_flow.install_dir", return_value=None),
+        patch(
+            "core.update_flow.write_relaunch_watchdog", return_value=Path("w.cmd")
+        ) as write,
+        patch("core.update_flow.spawn_watchdog") as spawn,
+    ):
+        updater.apply_update(_update(), Path(r"C:\temp\setup.exe"))
+    write.assert_called_once_with(88, Path(sys.executable))
     spawn.assert_called_once()
 
 

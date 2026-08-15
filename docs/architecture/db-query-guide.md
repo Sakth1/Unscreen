@@ -17,15 +17,19 @@ dictionary-encoded event types/sources, `payload_hash` dedup identity,
 
 | Platform | Path |
 |---|---|
-| Windows | `%APPDATA%\Unscreen\data.db` |
+| Windows (installed) | `%APPDATA%\Unscreen\data.db` |
 | Android | `$HOME/Unscreen/data.db` or `/data/data/com.mycompany.unscreen/files/Unscreen/data.db` |
+| Dev (`flet run`) | `<project>/.flet/storage/data/data.db` (git-ignored) |
 | Override | `UNSCREEN_DATA_DIR` env var replaces the whole data dir (development/testing only) |
 
-Note (v0.4.10-dev2): flet's own `FLET_APP_STORAGE_DATA` env var is
-deliberately **ignored** by `get_data_dir()` — installed builds always use
-the canonical paths above, so data never lands in flet's
-`%APPDATA%\Flet\unscreen\data` folder. `UNSCREEN_DATA_DIR` is the only
-override and it is app-specific.
+Note (v0.4.10-dev3): flet's own `FLET_APP_STORAGE_DATA` env var is honored
+**only** in CLI dev mode (`flet run`), where it points at the project-local,
+git-ignored `.flet/storage/data` dir — dev runs never touch `%APPDATA%`.
+Installed builds set the same variable to the OS app-support dir, which is
+deliberately **ignored** so they always use the canonical paths above and
+data never lands in flet's `%APPDATA%\Flet\unscreen\data` folder.
+`UNSCREEN_DATA_DIR` is the only app-specific override and wins over all of
+the above.
 
 Android durability (v0.4.10-dev3): the app keeps a consistent copy of
 `data.db` in the user-visible MediaStore Downloads collection at
@@ -449,13 +453,23 @@ one tool, no custom scripts.
 ### Open the database
 
 The app may be running — that is fine (WAL readers don't block writers).
-Use `-readonly` so you can never accidentally modify data:
+Use `-readonly` so you can never accidentally modify data. The DB lives in
+different places depending on how the app was started (see §1):
+
+| Run mode | DB path |
+|---|---|
+| Dev (`flet run`) | `<repo>\.flet\storage\data\data.db` |
+| Installed (Windows) | `%APPDATA%\Unscreen\data.db` |
 
 ```powershell
+# dev run — from the repo root
+sqlite3 -readonly ".flet\storage\data\data.db"
+
+# installed build
 sqlite3 -readonly "$env:APPDATA\Unscreen\data.db"
 ```
 
-(or, without PATH: `& "C:\sqlite\sqlite3.exe" -readonly "$env:APPDATA\Unscreen\data.db"`)
+(or, without PATH: `& "C:\sqlite\sqlite3.exe" -readonly ...`)
 
 You are now at the `sqlite>` prompt. Exit anytime with `.quit`.
 
@@ -547,6 +561,10 @@ If you cannot download anything, `uv run python` has the official Python
 `sqlite3` module built in — a one-liner, not a tool:
 
 ```powershell
+# dev run — from the repo root
+uv run python -c "import sqlite3; c=sqlite3.connect(r'.flet\storage\data\data.db'); print(c.execute(\"SELECT et.name, COUNT(*) FROM raw_events e JOIN event_types et ON et.id=e.event_type_fk GROUP BY et.name\").fetchall())"
+
+# installed build
 uv run python -c "import sqlite3; c=sqlite3.connect(r'$env:APPDATA\Unscreen\data.db'); print(c.execute(\"SELECT et.name, COUNT(*) FROM raw_events e JOIN event_types et ON et.id=e.event_type_fk GROUP BY et.name\").fetchall())"
 ```
 
