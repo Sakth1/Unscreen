@@ -453,13 +453,23 @@ one tool, no custom scripts.
 ### Open the database
 
 The app may be running — that is fine (WAL readers don't block writers).
-Use `-readonly` so you can never accidentally modify data:
+Use `-readonly` so you can never accidentally modify data. The DB lives in
+different places depending on how the app was started (see §1):
+
+| Run mode | DB path |
+|---|---|
+| Dev (`flet run`) | `<repo>\.flet\storage\data\data.db` |
+| Installed (Windows) | `%APPDATA%\Unscreen\data.db` |
 
 ```powershell
+# dev run — from the repo root
+sqlite3 -readonly ".flet\storage\data\data.db"
+
+# installed build
 sqlite3 -readonly "$env:APPDATA\Unscreen\data.db"
 ```
 
-(or, without PATH: `& "C:\sqlite\sqlite3.exe" -readonly "$env:APPDATA\Unscreen\data.db"`)
+(or, without PATH: `& "C:\sqlite\sqlite3.exe" -readonly ...`)
 
 You are now at the `sqlite>` prompt. Exit anytime with `.quit`.
 
@@ -551,6 +561,10 @@ If you cannot download anything, `uv run python` has the official Python
 `sqlite3` module built in — a one-liner, not a tool:
 
 ```powershell
+# dev run — from the repo root
+uv run python -c "import sqlite3; c=sqlite3.connect(r'.flet\storage\data\data.db'); print(c.execute(\"SELECT et.name, COUNT(*) FROM raw_events e JOIN event_types et ON et.id=e.event_type_fk GROUP BY et.name\").fetchall())"
+
+# installed build
 uv run python -c "import sqlite3; c=sqlite3.connect(r'$env:APPDATA\Unscreen\data.db'); print(c.execute(\"SELECT et.name, COUNT(*) FROM raw_events e JOIN event_types et ON et.id=e.event_type_fk GROUP BY et.name\").fetchall())"
 ```
 
