@@ -2302,7 +2302,7 @@ wheels = [
 
 [[package]]
 name = "unscreen"
-version = "0.4.9"
+version = "0.4.10.dev1"
 source = { editable = "." }
 dependencies = [
     { name = "flet" },

@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import suppress
 
 import flet as ft
@@ -8,7 +9,7 @@ from core.application.collection_manager import CollectionManager
 from core.auto_start import enable as enable_auto_start
 from core.auto_start import is_enabled as is_auto_start_enabled
 from core.config_manager import ConfigManager
-from core.logging_setup import apply_root_level, setup_file_logging
+from core.logging_setup import apply_root_level, get_log_path, setup_file_logging
 from core.state.app_state import get_app_state
 from core.update_checker import UpdateChecker
 from UI.custom.navigation_bar import (
@@ -51,7 +52,8 @@ from utils.models import (
     SecondaryNavigationChangeData,
     SecondaryNavigationPattern,
 )
-from utils.platform import acquire_instance_mutex, detect_os
+from utils.paths import get_data_dir
+from utils.platform import acquire_instance_mutex, detect_os, is_packaged
 from utils.versions import get_current_version
 
 logging.basicConfig(
@@ -102,6 +104,19 @@ class App:
 
         setup_file_logging()
         apply_root_level(self.config.log_level)
+
+        logger.info(
+            "App startup: version=%s os=%s packaged=%s",
+            get_current_version(),
+            detect_os(),
+            is_packaged(),
+        )
+        logger.info(
+            "Data storage: dir=%s (FLET_APP_STORAGE_DATA=%s) log=%s",
+            get_data_dir(),
+            os.environ.get("FLET_APP_STORAGE_DATA") or "unset",
+            get_log_path() or "none",
+        )
 
         self.collection_manager = CollectionManager(config=self.config)
 

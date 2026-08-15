@@ -49,6 +49,7 @@ class Storage:
             self._run_migrations()
             self._register_device()
             self._run_startup_health_checks()
+            self._log_storage_info()
         except sqlite3.DatabaseError as exc:
             if path == ":memory:":
                 raise
@@ -58,6 +59,34 @@ class Storage:
                 exc,
             )
             self._rebuild_corrupt_database()
+
+    def _log_storage_info(self) -> None:
+        try:
+            journal = self._conn.execute("PRAGMA journal_mode").fetchone()[0]
+            version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+            count = self._conn.execute("SELECT COUNT(*) FROM raw_events").fetchone()[0]
+        except sqlite3.DatabaseError as exc:
+            logger.error("Could not read storage info: %s", exc)
+            return
+        size = os.path.getsize(self._path) if os.path.exists(self._path) else 0
+        logger.info(
+            "Storage initialized: db=%s dir=%s FLET_APP_STORAGE_DATA=%s "
+            "platform=%s device_id=%s journal=%s user_version=%d "
+            "raw_events=%d size_bytes=%d",
+            self._path,
+            get_data_dir(),
+            os.environ.get("FLET_APP_STORAGE_DATA") or "unset",
+            self._platform,
+            self._device_id,
+            journal,
+            version,
+            count,
+            size,
+        )
+
+    @property
+    def db_path(self) -> str:
+        return self._path
 
     def _connect(self) -> sqlite3.Connection:
         conn = None
@@ -194,6 +223,13 @@ class Storage:
         payload: dict,
         source: str,
     ) -> int:
+        logger.debug(
+            "Writing event: type=%s timestamp=%.3f source=%s payload=%s",
+            event_type,
+            timestamp,
+            source,
+            json.dumps(payload)[:200],
+        )
         self._conn.execute(
             """INSERT INTO raw_events
                (device_id, platform, event_type, timestamp, collected_at, payload, source)
