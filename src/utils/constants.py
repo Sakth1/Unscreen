@@ -70,4 +70,4 @@ RELEASES_REPO_URL = "https://api.github.com/repos/sakth1/Unscreen/releases?per_p
 RELEASES_PAGE_URL = "https://github.com/sakth1/Unscreen/releases/latest"
 
 #: Version reported when package metadata is unavailable (e.g. unbundled runs).
-FALLBACK_APP_VERSION = "0.4.10-dev1"
+FALLBACK_APP_VERSION = "0.4.10-dev2"

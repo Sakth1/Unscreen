@@ -44,7 +44,7 @@ def no_network(monkeypatch):
 @pytest.fixture(autouse=True)
 def tmp_data_dir(tmp_path, monkeypatch):
     """Redirect all app disk I/O (data dir, logs, exports) into a per-test tmp dir."""
-    monkeypatch.setenv("FLET_APP_STORAGE_DATA", str(tmp_path / "data"))
+    monkeypatch.setenv("UNSCREEN_DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setattr("utils.paths.get_export_dir", lambda: str(tmp_path / "exports"))
     return tmp_path
 

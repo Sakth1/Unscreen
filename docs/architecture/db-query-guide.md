@@ -16,7 +16,13 @@ exploration added (§8).
 |---|---|
 | Windows | `%APPDATA%\Unscreen\data.db` |
 | Android | `$HOME/Unscreen/data.db` or `/data/data/com.mycompany.unscreen/files/Unscreen/data.db` |
-| Override | `FLET_APP_STORAGE_DATA` env var replaces the whole data dir |
+| Override | `UNSCREEN_DATA_DIR` env var replaces the whole data dir (development/testing only) |
+
+Note (v0.4.10-dev2): flet's own `FLET_APP_STORAGE_DATA` env var is
+deliberately **ignored** by `get_data_dir()` — installed builds always use
+the canonical paths above, so data never lands in flet's
+`%APPDATA%\Flet\unscreen\data` folder. `UNSCREEN_DATA_DIR` is the only
+override and it is app-specific.
 
 `utils/paths.py:get_data_dir()` is the single source of truth. SQLite runs
 in **WAL mode** (`journal_mode=WAL`, `synchronous=NORMAL`) — you will see

@@ -8,9 +8,14 @@ _ANDROID_PACKAGE = "com.mycompany.unscreen"
 
 
 def get_data_dir() -> str:
-    flet_data = os.environ.get("FLET_APP_STORAGE_DATA")
-    if flet_data:
-        return flet_data
+    # App-specific override for development/testing. flet's own
+    # FLET_APP_STORAGE_DATA is deliberately NOT honored here so installed
+    # builds always store user data in the canonical location
+    # (%APPDATA%\Unscreen on Windows, app internal storage on Android) —
+    # see docs/architecture/db-query-guide.md §1 and docs/ci-cd.md.
+    override = os.environ.get("UNSCREEN_DATA_DIR")
+    if override:
+        return override
 
     if is_android():
         home = os.environ.get("HOME")

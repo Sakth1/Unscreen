@@ -70,12 +70,12 @@ class Storage:
             return
         size = os.path.getsize(self._path) if os.path.exists(self._path) else 0
         logger.info(
-            "Storage initialized: db=%s dir=%s FLET_APP_STORAGE_DATA=%s "
+            "Storage initialized: db=%s dir=%s UNSCREEN_DATA_DIR=%s "
             "platform=%s device_id=%s journal=%s user_version=%d "
             "raw_events=%d size_bytes=%d",
             self._path,
             get_data_dir(),
-            os.environ.get("FLET_APP_STORAGE_DATA") or "unset",
+            os.environ.get("UNSCREEN_DATA_DIR") or "unset",
             self._platform,
             self._device_id,
             journal,
