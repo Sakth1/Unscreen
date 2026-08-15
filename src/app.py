@@ -112,9 +112,9 @@ class App:
             is_packaged(),
         )
         logger.info(
-            "Data storage: dir=%s (FLET_APP_STORAGE_DATA=%s) log=%s",
+            "Data storage: dir=%s (UNSCREEN_DATA_DIR=%s) log=%s",
             get_data_dir(),
-            os.environ.get("FLET_APP_STORAGE_DATA") or "unset",
+            os.environ.get("UNSCREEN_DATA_DIR") or "unset",
             get_log_path() or "none",
         )
 

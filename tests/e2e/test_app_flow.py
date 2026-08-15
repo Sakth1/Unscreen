@@ -43,7 +43,7 @@ pytestmark = pytest.mark.e2e
 async def flet_app(tmp_path, monkeypatch):
     from flet.testing import FletTestApp
 
-    monkeypatch.setenv("FLET_APP_STORAGE_DATA", str(tmp_path))
+    monkeypatch.setenv("UNSCREEN_DATA_DIR", str(tmp_path))
 
     app_holder = {}
 

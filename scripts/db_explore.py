@@ -23,10 +23,9 @@ _ANDROID_PACKAGE = "com.mycompany.unscreen"
 
 
 def resolve_db_path() -> str:
-    return r"C:\Users\HP\AppData\Roaming\Unscreen\data.db"
-    flet_data = os.environ.get("FLET_APP_STORAGE_DATA")
-    if flet_data:
-        return os.path.join(flet_data, "data.db")
+    override = os.environ.get("UNSCREEN_DATA_DIR")
+    if override:
+        return os.path.join(override, "data.db")
     if platform.system() == "Windows":
         base = os.environ.get("APPDATA")
         if base:
