@@ -260,7 +260,7 @@ jobs:
 
       - name: Build Android APK
         run: |
-          flet build apk --yes --compile-packages --skip-flutter-doctor --no-rich-output
+          flet build apk --yes --build-number "${{ github.run_number }}" --skip-flutter-doctor --no-rich-output
 
       - name: Decode Android keystore
         shell: bash
@@ -315,6 +315,11 @@ jobs:
         shell: bash
         run: |
           "${ANDROID_SDK_ROOT}/build-tools/35.0.0/apksigner" verify signed.apk
+
+      - name: Print signing certificate
+        shell: bash
+        run: |
+          "${ANDROID_SDK_ROOT}/build-tools/35.0.0/apksigner" verify --print-certs signed.apk
 
       - name: Collect APK
         id: collect
