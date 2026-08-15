@@ -6,7 +6,10 @@ Status note: written at v0.4.8 after the timeline branch was reverted. The
 re-implement session reconstruction ("cleaning") yourself. This document
 tells you exactly what data is on disk, in what shape, and how to get it
 out. Updated at v0.4.9: `Storage.count_events()` added (§5), CLI
-exploration added (§8).
+exploration added (§8). Updated for **schema v7** (v0.4.10-dev): de-bloated
+event store — integer FK references, integer-millisecond timestamps,
+dictionary-encoded event types/sources, `payload_hash` dedup identity,
+`sync_cursors`. Pre-v7 databases are **wiped, not migrated** (see §9).
 
 ---
 
@@ -31,37 +34,54 @@ That copy survives an app uninstall and is user-deletable, mirroring the
 Windows contract; Auto Backup is also enabled explicitly
 (`allowBackup="true"` in the manifest) for silent cloud restore after
 reinstall. The copy is synced on collection stop and hourly, and is
-restored into a fresh data dir when present (same-install only). See
+restored into a fresh data dir when present (same-install only). A schema
+wipe also **deletes** the backup so it cannot resurrect wiped data. See
 `docs/research/android-data-persistence.md` and ADR-0003.
 
 `utils/paths.py:get_data_dir()` is the single source of truth. SQLite runs
 in **WAL mode** (`journal_mode=WAL`, `synchronous=NORMAL`) — you will see
 `data.db-wal` and `data.db-shm` sidecars while the app is running; querying
 the main file while the app is live is safe (WAL readers are non-blocking).
-Schema is versioned via `PRAGMA user_version` (`SCHEMA_VERSION = 6`).
+Schema is versioned via `PRAGMA user_version` (`SCHEMA_VERSION = 7`).
 
-## 2. Schema (3 live tables + registry)
+## 2. Schema (7 live tables + registry)
 
 ### `devices` — device registry
 ```sql
-device_id TEXT PRIMARY KEY, hostname TEXT, platform TEXT,
-first_seen TEXT, last_seen TEXT, is_current INTEGER
+id INTEGER PRIMARY KEY AUTOINCREMENT, device_id TEXT NOT NULL UNIQUE,
+hostname TEXT, platform TEXT, first_seen TEXT, last_seen TEXT,
+is_current INTEGER
 ```
 One row per physical device (registered with `INSERT OR IGNORE` on every
-startup). `platform` is `"windows"` or `"android"` (lowercase).
+startup). `platform` is `"windows"` or `"android"` (lowercase). `id` is the
+stable integer key every other table references; `device_id` (the
+per-install UUID) appears **only here** — event rows never repeat it.
+
+### `event_types` / `sources` — dictionary tables
+```sql
+event_types: id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE
+sources:     id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE
+```
+A handful of distinct values each. `raw_events` references them by
+`event_type_fk` / `source_fk`; join to read the names (the Storage API does
+this for you).
 
 ### `raw_events` — the canonical event store (append-only)
 ```sql
-id           INTEGER PRIMARY KEY AUTOINCREMENT,
-device_id    TEXT NOT NULL,
-platform     TEXT NOT NULL,
-event_type   TEXT NOT NULL,   -- see §3
-timestamp    REAL NOT NULL,   -- Unix epoch SECONDS (UTC), when the event occurred
-collected_at REAL NOT NULL,   -- Unix epoch seconds (UTC), when we observed it
-payload      TEXT NOT NULL,   -- JSON object, type-specific
-source       TEXT NOT NULL    -- which watcher/API produced it
+id            INTEGER PRIMARY KEY AUTOINCREMENT,
+device_fk     INTEGER NOT NULL REFERENCES devices(id),
+event_type_fk INTEGER NOT NULL REFERENCES event_types(id),
+source_fk     INTEGER NOT NULL REFERENCES sources(id),
+timestamp     INTEGER NOT NULL,   -- Unix epoch MILLISECONDS (UTC), when the event occurred
+collected_at  INTEGER NOT NULL,   -- Unix epoch ms (UTC), when we observed it
+payload       TEXT NOT NULL,      -- JSON object, type-specific
+payload_hash  BLOB NOT NULL       -- 16-byte blake2b of canonical payload JSON
 ```
-Indexes: `(event_type, timestamp)`, `(device_id, timestamp)`.
+`UNIQUE(device_fk, event_type_fk, timestamp, payload_hash)` is the dedup
+identity: it admits Android's same-millisecond `app_usage_interval`
+fan-out (distinct payloads → distinct hashes) while rejecting identical
+re-imports (sync idempotence). Indexes: `(device_fk, timestamp)`,
+`(event_type_fk, timestamp)`.
 
 > **The single most important rule (ADR-0002):** `timestamp` is the event's
 > truth. **Duration is never stored on events** — it is always derived from
@@ -70,39 +90,58 @@ Indexes: `(event_type, timestamp)`, `(device_id, timestamp)`.
 
 ### `sessions` — derived sessions (currently an empty API surface)
 ```sql
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-device_id TEXT NOT NULL, platform TEXT NOT NULL,
-start_ts REAL NOT NULL, end_ts REAL, duration_s REAL,
-app_key TEXT NOT NULL, payload TEXT NOT NULL,
+id           INTEGER PRIMARY KEY AUTOINCREMENT,
+device_fk    INTEGER NOT NULL REFERENCES devices(id),
+start_ts     INTEGER NOT NULL,   -- Unix epoch ms (UTC)
+end_ts       INTEGER,            -- Unix epoch ms (UTC)
+duration_s   REAL,
+app_key      TEXT NOT NULL,
+payload      TEXT NOT NULL,
 session_type TEXT DEFAULT 'foreground'
 ```
-Indexes: `(device_id, app_key, start_ts)`, `(device_id, start_ts)`.
+Indexes: `(device_fk, app_key, start_ts)`, `(device_fk, start_ts)`.
 `Storage.write_canonical_session()` / `get_canonical_sessions()` exist but
 **nothing calls them at v0.4.8** — the reconstructor was part of the
 reverted branch. Rebuilding this table is your job (§6).
 
 ### `url_visits` — browser navigation log (Windows only, optional)
 ```sql
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-device_id TEXT NOT NULL,
-event_id   INTEGER REFERENCES raw_events(id),
-session_id INTEGER REFERENCES sessions(id),
-url TEXT NOT NULL, scheme TEXT, host TEXT, domain TEXT, path TEXT,
+id                INTEGER PRIMARY KEY AUTOINCREMENT,
+device_fk         INTEGER NOT NULL REFERENCES devices(id),
+event_id          INTEGER NOT NULL REFERENCES raw_events(id),
+session_id        INTEGER REFERENCES sessions(id),
+url               TEXT NOT NULL,
+browser           TEXT,
+scheme TEXT, host TEXT, domain TEXT, path TEXT,
 extraction_method TEXT, confidence TEXT DEFAULT 'high',
-is_trackable INTEGER DEFAULT 1,
-seen_at REAL NOT NULL, collected_at REAL NOT NULL
+is_trackable      INTEGER DEFAULT 1,
+seen_at           INTEGER NOT NULL,   -- Unix epoch ms (UTC)
+collected_at      INTEGER NOT NULL    -- Unix epoch ms (UTC)
 ```
-`event_id` / `session_id` are backfilled by
-`Storage.backfill_url_event_id()` / `backfill_url_session_id()` (not
-populated at v0.4.8 either). Indexes on `(device_id, seen_at)`,
-`(device_id, domain, seen_at)`, `event_id`, `session_id`.
+**`event_id` is populated at write time** by the event bridge (v7): the
+`foreground_transition` that started the browser session owns every visit
+row written until the next app transition. It is NOT NULL — no backfill
+exists (the old `backfill_url_event_id()` was removed). `session_id` is
+still filled by the future session reconstructor (derived, nullable;
+`backfill_url_session_id()` exists). `UNIQUE(device_fk, event_id, url)`
+collapses revisits of one URL within a session; `write_url_visit()`
+skips duplicates silently. Indexes on `(device_fk, seen_at)`,
+`(device_fk, domain, seen_at)`, `event_id`, `session_id`.
 
-### Gone forever (cleaned by migration)
+### `sync_cursors` — sync high-water marks (planned sync engine)
+```sql
+remote_device_id TEXT PRIMARY KEY,
+last_synced_at   INTEGER NOT NULL   -- Unix epoch ms (UTC)
+```
+One row per remote device this device has exchanged data with. Not written
+by anything yet.
+
+### Gone forever (cleaned by wipe)
 Legacy per-device tables `events_<short_id>`, `observations_<short_id>`,
-`sessions_<short_id>` are dropped by the v0.5 migration (schemas
-`windows.sql` / `android.sql`). A stray `tick_uuid` column on `raw_events`
-was also dropped. If a DB predates v0.5, migration handles it; there is
-nothing left to clean by hand.
+`sessions_<short_id>` (pre-v0.5) and the v0.5/v0.6 shared tables with
+`device_id TEXT` columns and REAL timestamps are all gone. Pre-v7
+databases are **deleted and recreated fresh** on first launch (§9) — there
+is no migration SQL to reason about.
 
 ## 3. Event catalog — every `event_type` and its `payload`
 
@@ -110,20 +149,26 @@ Written through `Storage.write_event()` via the `_EventBridge` in
 `core/application/collection_manager.py`. `source` = the watcher name from
 `_watcher_to_event_type()`.
 
-### `foreground_transition` — app switch
+### `foreground_transition` — app switch (lean payload, v7)
 | source | payload |
 |---|---|
-| `foreground` (Windows) | `{"app": "chrome.exe", "title": "...", "pid": 1234}` plus, when browser + URL extraction enabled: `"browser"`, `"url"`, or `"page_title"`/`"inferred_domain"` |
+| `foreground` (Windows) | `{"app": "chrome.exe", "title": "...", "pid": 1234}` |
 | `android_foreground` | `{"package": "com.android.chrome", "app_name": "Chrome"}` |
 
 - Windows polls `GetForegroundWindow` every **2 s**; Android watches
   UsageStats `ACTIVITY_RESUMED` events every **10 s**.
+- The payload is pure app-transition context. Browser/URL data is **not**
+  in the payload — it travels as a `url_visit` attachment and lands in the
+  `url_visits` table (§9).
 - The bridge **dedups consecutive identical apps in memory**
   (`_last_app[watcher]`): no two adjacent rows share the same app key, so
   the start of the next transition is implicitly the end of the previous.
   Dedup is *not* persisted anywhere else — do not re-dedup in SQL.
 - The very first transition after app start is written too (bridge starts
   with `_last_app` empty).
+- Every transition row writes its rowid into the bridge's
+  `_last_event_id[watcher]` cache; `url_visits` written while the same app
+  stays foreground reuse that event id.
 
 ### `idle_transition` — Windows user activity (precise)
 ```json
@@ -181,8 +226,10 @@ At v0.4.8 there is no row-level cleaning step in the codebase. What
 1. **Immutable raw store.** `raw_events` is never UPDATEd or DELETEd by the
    app (only `clear_all_data()` wipes it). If you need a "cleaned" view,
    derive it in a query or rebuild `sessions` — never edit `raw_events`.
-2. **Dedup already happened at the bridge** (consecutive duplicate
-   foreground transitions are dropped in memory).
+2. **Dedup happened at the bridge** (consecutive duplicate foreground
+   transitions are dropped in memory) **and at the identity level**
+   (`UNIQUE(device_fk, event_type_fk, timestamp, payload_hash)` rejects
+   exact re-imports — the sync idempotence guarantee).
 3. **Derived data is disposable.** `sessions` can be truncated and rebuilt
    at any time from `raw_events` — that is the design.
 4. **DB maintenance** is automatic: `PRAGMA integrity_check` + auto-VACUUM
@@ -213,40 +260,59 @@ s.get_canonical_sessions(app_key=..., device_id=..., since=..., until=...,
                          platform=..., limit=...)     # derived sessions as dicts
 s.close()
 ```
-All methods return dicts with `payload` parsed back to a `dict`.
+All methods return dicts with `payload` parsed back to a `dict`, and
+`device_id` / `platform` / `event_type` / `source` re-joined from the
+dictionary tables (the API shape is unchanged from v6 — only the storage
+layout changed). **Timestamps are integer milliseconds everywhere.**
 
 ### Raw SQL (the workhorse queries)
 
+`raw_events` no longer stores `device_id`/`event_type`/`source` as text —
+join the registry tables:
+
 ```sql
 -- A day of foreground activity, Windows
-SELECT timestamp, payload FROM raw_events
-WHERE event_type = 'foreground_transition' AND platform = 'windows'
-  AND timestamp >= ? AND timestamp <= ?        -- day start/end (UTC epoch)
-ORDER BY timestamp ASC;
+SELECT e.timestamp, e.payload, d.platform
+FROM raw_events e
+JOIN event_types et ON et.id = e.event_type_fk
+JOIN devices d      ON d.id   = e.device_fk
+WHERE et.name = 'foreground_transition' AND d.platform = 'windows'
+  AND e.timestamp >= ? AND e.timestamp <= ?      -- day start/end (UTC epoch ms)
+ORDER BY e.timestamp ASC;
 
 -- Consecutive pairs → sessions: each row's end is the NEXT row's timestamp.
 -- (SQLite window functions work well here: LEAD(timestamp) OVER (ORDER BY timestamp))
 
 -- Idle/away timeline (Windows): statuses between two foreground transitions
-SELECT timestamp, json_extract(payload, '$.status') AS status
-FROM raw_events WHERE event_type = 'idle_transition' ORDER BY timestamp;
+SELECT e.timestamp, json_extract(e.payload, '$.status') AS status
+FROM raw_events e
+JOIN event_types et ON et.id = e.event_type_fk
+WHERE et.name = 'idle_transition' ORDER BY e.timestamp;
 
 -- Screen-off blocks (Android): pair screen_on=false with the next screen_on=true
-SELECT timestamp AS off_at, LEAD(timestamp) OVER (ORDER BY timestamp) AS on_at
-FROM raw_events
-WHERE event_type = 'screen_state_change' AND json_extract(payload, '$.screen_on') = 0;
+SELECT e.timestamp AS off_at,
+       LEAD(e.timestamp) OVER (ORDER BY e.timestamp) AS on_at
+FROM raw_events e
+JOIN event_types et ON et.id = e.event_type_fk
+WHERE et.name = 'screen_state_change'
+  AND json_extract(e.payload, '$.screen_on') = 0;
 
 -- Battery state blocks
-SELECT timestamp, json_extract(payload, '$.charging') AS charging
-FROM raw_events WHERE event_type = 'power_change' ORDER BY timestamp;
+SELECT e.timestamp, json_extract(e.payload, '$.charging') AS charging
+FROM raw_events e
+JOIN event_types et ON et.id = e.event_type_fk
+WHERE et.name = 'power_change' ORDER BY e.timestamp;
 
 -- Android per-package duration deltas in a window
-SELECT json_extract(payload, '$.package') AS pkg,
-       SUM(json_extract(payload, '$.duration_s')) AS total_s
-FROM raw_events WHERE event_type = 'app_usage_interval'
+SELECT json_extract(e.payload, '$.package') AS pkg,
+       SUM(json_extract(e.payload, '$.duration_s')) AS total_s
+FROM raw_events e
+JOIN event_types et ON et.id = e.event_type_fk
+WHERE et.name = 'app_usage_interval'
 GROUP BY pkg ORDER BY total_s DESC;
 
 -- URL visits joined to the foreground event that produced them
+-- (event_id is populated at write time since v7)
 SELECT u.url, u.domain, u.seen_at, e.timestamp
 FROM url_visits u LEFT JOIN raw_events e ON e.id = u.event_id
 WHERE u.is_trackable = 1 ORDER BY u.seen_at;
@@ -296,9 +362,9 @@ philosophy #5).
 ### Session shape & invariants (the contract)
 
 ```python
-start_ts: float       # first event timestamp of the block
-end_ts: float         # next transition start (or last event + poll interval)
-duration_s: float     # end - start (Windows); UsageStats sums (Android)
+start_ts: int         # first event timestamp of the block (epoch ms)
+end_ts: int           # next transition start (or last event + poll interval)
+duration_s: float     # (end - start) / 1000 (Windows); UsageStats sums (Android)
 app_key: str          # process name (Windows) / package name (Android)
 payload: dict         # merged metadata (title, app_name, ...)
 session_type: str     # "foreground" — the only type today
@@ -308,22 +374,26 @@ Invariants to preserve when re-implementing:
 
 - One session per contiguous foreground block per app; no overlaps, no
   gaps for the same app.
-- `end_ts >= start_ts`; `duration_s = end_ts - start_ts` unless Android
-  UsageStats is authoritative.
-- `device_id` + `platform` carried from the events the session was built
-  from.
+- `end_ts >= start_ts`; `duration_s = (end_ts - start_ts) / 1000` unless
+  Android UsageStats is authoritative.
+- `device_fk` + platform carried from the events the session was built
+  from (resolve `device_id` → `device_fk` via `devices` when writing
+  sessions for foreign devices).
 
 ### Reconstruction recipe (the "cleaning" you will re-implement)
 
 Per ADR-0002, sessions are derived and idempotent. Reference recipe used by
 the reverted branch (re-implement freely, this is the shape):
 
-1. **Per platform**, pull `foreground_transition` rows for the window.
+1. **Per platform**, pull `foreground_transition` rows for the window
+   (join `event_types`/`devices` to filter).
 2. **Windows:** pair consecutive transitions; each pair
    `[start_ts, next_start_ts)` is a session of `app_key = payload.app`
    (dedup already guarantees alternation). Merge in `idle_transition`
    spans (`status != 'active'`) clipped to the session, and `power_change`
    for charging states. Sleep = a long `away` run or a gap with no events.
+   Fill `url_visits.session_id` for visits whose `event_id` falls inside
+   the session via `backfill_url_session_id()`.
 3. **Android:** transitions give coarse start/end; refine `duration_s`
    with the sum of `app_usage_interval.duration_s` for that package in the
    window (UsageStats is authoritative for time-in-app). Use
@@ -334,17 +404,25 @@ the reverted branch (re-implement freely, this is the shape):
 
 ## 7. Gotchas
 
-- All timestamps are **UTC epoch seconds** (REAL). Convert with
-  `datetime.fromtimestamp(ts, tz=utc)`; "a day" means a local-day range
-  computed in the app, not a fixed 86 400 s slice.
+- All timestamps are **UTC epoch milliseconds** (INTEGER). Convert with
+  `datetime.fromtimestamp(ts / 1000, tz=utc)`; "a day" means a local-day
+  range computed in the app, not a fixed 86 400 s slice.
 - `payload` is JSON text — `json_extract` in SQL, or load in Python
   (`Storage` methods already parse it for you).
+- `raw_events` holds FKs, not names: filter/group by joining
+  `event_types`, `sources`, `devices` — or use the Storage API, which
+  re-joins for you.
 - No events are emitted while Android's screen is off (auto-pause) or on
   Windows while the app is closed — the timeline you build is
   "collection-lived", gaps are data, not corruption.
 - Desktop Windows with no battery → no `power_change` rows at all.
-- `sessions` and `url_visits.event_id/session_id` backfill are write APIs
-  with no producers yet; don't query them expecting data at v0.4.8.
+- `sessions` has no producer yet, and `url_visits.session_id` is unfilled
+  until the reconstructor runs; don't query them expecting data at
+  v0.4.10. `url_visits.event_id` **is** populated at write time since v7.
+- Duplicate writes are **not** silent failures: an exact `raw_events`
+  re-import raises `IntegrityError` (by design, for sync idempotence);
+  duplicate `url_visits` are skipped silently (same URL revisited in one
+  session).
 - Export (Settings → export) reads `raw_events` via `ExportService` — a
   ready-made example of the read path.
 
@@ -384,52 +462,59 @@ You are now at the `sqlite>` prompt. Exit anytime with `.quit`.
 ### First look around
 
 ```sql
-.tables                                  -- devices, raw_events, sessions, url_visits
+.tables                                  -- devices, event_types, sources, raw_events, sessions, url_visits, sync_cursors
 .schema raw_events                       -- DDL for one table (or .schema for all)
 .headers on                              -- show column names
 .mode column                             -- aligned table output (.mode box is prettier)
-PRAGMA user_version;                     -- schema version, expect 6
+PRAGMA user_version;                     -- schema version, expect 7
 PRAGMA journal_mode;                     -- expect 'wal'
 PRAGMA integrity_check;                  -- 'ok' = file is healthy
 ```
 
 ### Reading the data as the guide's queries intend
 
-Timestamps are UTC epoch seconds; render them human-readable with the
-`unixepoch` modifier, `localtime` for your timezone:
+Timestamps are UTC epoch **milliseconds**; render them human-readable with
+a ms → s division plus the `unixepoch` modifier, `localtime` for your
+timezone:
 
 ```sql
 -- 10 most recent events, local time
-SELECT datetime(timestamp, 'unixepoch', 'localtime') AS local_time,
-       event_type, source, json_extract(payload, '$.app') AS app
-FROM raw_events ORDER BY id DESC LIMIT 10;
+SELECT datetime(e.timestamp / 1000, 'unixepoch', 'localtime') AS local_time,
+       et.name AS event_type, s.name AS source,
+       json_extract(e.payload, '$.app') AS app
+FROM raw_events e
+JOIN event_types et ON et.id = e.event_type_fk
+JOIN sources s      ON s.id  = e.source_fk
+ORDER BY e.id DESC LIMIT 10;
 
 -- Event counts per type (first sanity check that collection works)
-SELECT event_type, COUNT(*) AS n FROM raw_events GROUP BY event_type;
+SELECT et.name AS event_type, COUNT(*) AS n
+FROM raw_events e JOIN event_types et ON et.id = e.event_type_fk
+GROUP BY et.name;
 
 -- "Events today" in YOUR local day (same definition as the status bar)
-SELECT COUNT(*) FROM raw_events
-WHERE timestamp >= strftime('%s', 'now', 'localtime', 'start of day');
+SELECT COUNT(*) FROM raw_events e JOIN event_types et ON et.id = e.event_type_fk
+WHERE e.timestamp >= strftime('%s', 'now', 'localtime', 'start of day') * 1000;
 
 -- A day's foreground activity (any of the §5 recipes work verbatim here)
-SELECT datetime(timestamp, 'unixepoch', 'localtime') AS t,
-       json_extract(payload, '$.app') AS app
-FROM raw_events
-WHERE event_type = 'foreground_transition'
-  AND timestamp >= strftime('%s', 'now', 'localtime', 'start of day')
-ORDER BY timestamp;
+SELECT datetime(e.timestamp / 1000, 'unixepoch', 'localtime') AS t,
+       json_extract(e.payload, '$.app') AS app
+FROM raw_events e JOIN event_types et ON et.id = e.event_type_fk
+WHERE et.name = 'foreground_transition'
+  AND e.timestamp >= strftime('%s', 'now', 'localtime', 'start of day') * 1000
+ORDER BY e.timestamp;
 ```
 
 Notes:
 - Modifiers are applied left-to-right: `'now','localtime','start of day'`
-  = local now → midnight local → epoch seconds. This matches the app's
-  "today" definition.
+  = local now → midnight local → epoch seconds. Multiply by 1000 to get
+  ms for comparison against `e.timestamp`.
 - `json_extract(payload, '$.app')` is the SQL twin of the Python
   `payload["app"]` the guide uses; quoted keys work the same
   (`'$.duration_s'`, `'$.screen_on'`).
 - Paste the longer §5 queries straight into the prompt; they only need
-  `?` placeholders replaced with concrete epoch numbers
-  (e.g. `WHERE timestamp >= 1755000000 AND timestamp <= 1755086400`).
+  `?` placeholders replaced with concrete epoch-ms numbers
+  (e.g. `WHERE e.timestamp >= 1755000000000 AND e.timestamp <= 1755086400000`).
 
 ### Exporting results to a file
 
@@ -462,7 +547,7 @@ If you cannot download anything, `uv run python` has the official Python
 `sqlite3` module built in — a one-liner, not a tool:
 
 ```powershell
-uv run python -c "import sqlite3; c=sqlite3.connect(r'$env:APPDATA\Unscreen\data.db'); print(c.execute(\"SELECT event_type, COUNT(*) FROM raw_events GROUP BY event_type\").fetchall())"
+uv run python -c "import sqlite3; c=sqlite3.connect(r'$env:APPDATA\Unscreen\data.db'); print(c.execute(\"SELECT et.name, COUNT(*) FROM raw_events e JOIN event_types et ON et.id=e.event_type_fk GROUP BY et.name\").fetchall())"
 ```
 
 ## 9. Other features worth knowing about
@@ -474,9 +559,9 @@ APIs → typed, immutable, append-only events → `raw_events` (canonical
 store) → derived views (`sessions`, state blocks). Two consequences you
 will feel: **nothing in `raw_events` is ever edited** (if a row is wrong,
 the fix is a new event or a derived view, never an UPDATE), and **every
-row remembers its origin** (`source` column + `device_id`). When in doubt
-about a number, go back to the events that produced it — not the other way
-around.
+row remembers its origin** (`source_fk` → `sources`, `device_fk` →
+`devices`). When in doubt about a number, go back to the events that
+produced it — not the other way around.
 
 ### Platform parity — what is precise vs. approximated (ADR-0001)
 
@@ -496,10 +581,33 @@ schemas are shared. This asymmetry is a design decision, not drift.
 
 `devices` is an append-only registry (`INSERT OR IGNORE` at startup): one
 row per physical device that ever ran the app, `is_current` marks the one
-you are on now. Every event and session carries `device_id`, so the schema
+you are on now. Every event and session carries `device_fk`, so the schema
 supports multi-device timelines; nothing in the app aggregates across
-devices yet — query with `WHERE device_id = (SELECT device_id FROM devices
-WHERE is_current = 1)` when you only want this machine.
+devices yet — query with
+`WHERE e.device_fk = (SELECT id FROM devices WHERE is_current = 1)` when
+you only want this machine.
+
+### Sync design (planned)
+
+All devices write into the single shared `raw_events` table, namespaced by
+`device_fk`. The future sync engine exports each device's rows after its
+high-water mark (`sync_cursors.last_synced_at`) and imports remote rows
+as-is; re-imports are rejected by `UNIQUE(device_fk, event_type_fk,
+timestamp, payload_hash)`. Cross-device timeline queries are plain
+`WHERE device_fk IN (...)`.
+
+### Schema versioning, wipe policy and durability
+
+`PRAGMA user_version` (= `SCHEMA_VERSION = 7`) gates schema handling:
+up-to-date DBs are opened as-is; a DB at version 0 (fresh) gets the schema
+created; **any DB at a version below 7 is deleted and recreated fresh —
+there is no data migration**. This is a deliberate early-stage policy:
+schemas are still settling, so old data is dropped rather than half-
+converted. On Android the durable backup
+(`Download/Unscreen-data-backup/unscreen.db`) is **deleted during the
+wipe** so a stale copy cannot resurrect pre-v7 data on the next install.
+"Clear all data" in Settings wipes events, sessions, url visits, and
+sync cursors (the device registry row stays).
 
 ### Automatic DB self-maintenance
 
@@ -510,15 +618,19 @@ recovered — `raw_events` is the only source, and it is gone with the file).
 There is nothing to do by hand; if you ever see `data.db.corrupt-*` files,
 that is the app telling you it survived, not that you need to repair.
 
-### URL visits — optional enrichment, Windows only
+### URL visits — optional enrichment, Windows only (v7 wiring)
 
-`url_visits` is an *optional* side-channel: when the Windows browser
-watcher has URL extraction enabled, `foreground_transition` payloads carry
-`browser`/`url`/`page_title`, and rows land in `url_visits` with
-`is_trackable` pre-computed. `event_id`/`session_id` backfills exist
-(`backfill_url_event_id()` / `backfill_url_session_id()`) so visits can be
-joined to the session that produced them once sessions are rebuilt — at
-v0.4.9 they are not populated.
+`url_visits` is an *optional* side-channel fed by the event bridge, not
+the collector: the Windows foreground watcher attaches a `url_visit` dict
+(`url`, `browser`, `scheme`, `host`, `domain`, `path`,
+`extraction_method`, `confidence`, `is_trackable`) to its tick on URL
+changes, and `_EventBridge` persists it against the owning
+`foreground_transition` event — a **fresh** event on app change, the
+**cached** `_last_event_id[watcher]` on tab change. The title-inference
+fallback is recorded with `confidence="low"` and
+`extraction_method=NULL`. The `foreground_transition` payload itself stays
+lean. `event_id` is always set (NOT NULL, no backfill); `session_id` gets
+filled by the future reconstructor via `backfill_url_session_id()`.
 
 ### Auto-pause and "collection-lived" timelines
 
@@ -534,22 +646,14 @@ stopped (or failed — it shows a `✗N` badge).
 `CollectionStatusBar` (bottom of the app shell) is the collection-health
 readout: state dot/label (collecting / paused / auto-paused / stopped),
 per-watcher chips (last tick in local time + failure badges), "N events
-today" (a `count_events(since=local midnight)` call) and the app version.
-Cross-check it with the CLI (§8): the state should match
+today" (a `count_events(since=local midnight in ms)` call) and the app
+version. Cross-check it with the CLI (§8): the state should match
 `collection_running`/`collection_paused` flags, chips should match recent
 `last_tick_at` values, and the counter should match
-`SELECT COUNT(*) ... strftime('%s','now','localtime','start of day')`.
-
-### Schema versioning and migration
-
-`PRAGMA user_version` (= `SCHEMA_VERSION = 6`) gates migrations: the app
-compares, migrates forward, and only then writes. Legacy per-device tables
-from pre-v0.5 are dropped by migration; if you open an old DB the first
-startup migrates it silently. There is no downgrade path — derived
-`user_version` changes are one-way.
+`SELECT COUNT(*) ... strftime('%s','now','localtime','start of day') * 1000`.
 
 ### The export path as a reference read
 
 Settings → export serializes `raw_events` via `ExportService` (CSV/JSON,
-local-time timestamps with UTC offset since v0.4.9) and is a working
-example of the read path — start there before writing your own export.
+local-time timestamps with UTC offset) and is a working example of the
+read path — start there before writing your own export.
