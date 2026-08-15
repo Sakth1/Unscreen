@@ -141,7 +141,10 @@ class CollectionManager:
             )
             logger.info("Screen state monitor started")
 
-        logger.info("Collection started")
+        logger.info(
+            "Collection started — events will be written to %s",
+            self._storage.db_path,
+        )
 
     async def restart(self) -> None:
         """Stop collection and rebuild watchers from the current config.

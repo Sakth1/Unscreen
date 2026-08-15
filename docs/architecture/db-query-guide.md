@@ -5,7 +5,8 @@ Status note: written at v0.4.8 after the timeline branch was reverted. The
 `sessions` table has **no producer** at this version (see §6) — you will
 re-implement session reconstruction ("cleaning") yourself. This document
 tells you exactly what data is on disk, in what shape, and how to get it
-out.
+out. Updated at v0.4.9: `Storage.count_events()` added (§5), CLI
+exploration added (§8).
 
 ---
 
@@ -190,6 +191,10 @@ s.get_latest_battery()                    # newest power_change payload or None
 s.get_url_visits(since=..., until=...)
 s.get_today_seconds()                     # SUM(duration_s) of sessions today
 s.get_today_top_apps(5)                   # sessions GROUP BY app_key today
+s.count_events(since=..., until=..., event_type=...)  # cheap COUNT(*) (0.4.9)
+s.write_canonical_session({...})      # insert one derived session (no producer yet)
+s.get_canonical_sessions(app_key=..., device_id=..., since=..., until=...,
+                         platform=..., limit=...)     # derived sessions as dicts
 s.close()
 ```
 All methods return dicts with `payload` parsed back to a `dict`.
@@ -231,7 +236,68 @@ FROM url_visits u LEFT JOIN raw_events e ON e.id = u.event_id
 WHERE u.is_trackable = 1 ORDER BY u.seen_at;
 ```
 
-## 6. Reconstructing sessions (the "cleaning" you will re-implement)
+## 6. The concept and philosophy of sessions
+
+### What a session is
+
+A **session** is one continuous foreground block: one app on one device,
+from the moment it became foreground to the moment another app replaced
+it. `session_type` is `'foreground'` and only that — AFK, screen and
+battery states are **not** sessions, they are state blocks (see
+philosophy #5).
+
+### The philosophy (ADR-0002)
+
+1. **Sessions are derived, never collected.** Collectors write events to
+   `raw_events`; nothing writes `sessions` at collection time. A session
+   is the *output* of a deterministic reconstruction step.
+2. **Duration is never stored at write time.** It is computed during
+   reconstruction from event timestamps. The sole exception is Android's
+   `app_usage_interval.duration_s` — a sampling artifact of the ~60 s
+   UsageStats batch, reference only.
+3. **Sessions are disposable and idempotent.** Reconstructing the same
+   window twice yields the same rows. `TRUNCATE sessions` and rebuild at
+   any time — derived data is never precious. This is why `sessions` has
+   write APIs (`write_canonical_session`) but no producer: the producer is
+   the reconstructor you re-implement.
+4. **Boundaries are half-open intervals.** A session is
+   `[start_ts, next_start_ts)`: its end is the *next* transition's start.
+   This works because the bridge dedups consecutive identical apps in
+   memory — transitions always alternate, no two adjacent rows share an
+   app key (§3).
+5. **Sessions carry no device state.** Idle/away, screen on/off,
+   charging/discharging are orthogonal time-series: during one session
+   the user can idle, the screen can go off (Android auto-pauses, so
+   events stop), or the battery can drain. Overlaying those blocks on a
+   session is a query-time concern (recipe step 2), not a session
+   property.
+6. **Precision is platform-honest (ADR-0001).** Windows: exact — 2 s
+   poll, precise idle via `GetLastInputInfo`. Android: coarse — 10 s event
+   granularity, 60 s duration batches, idle only *approximated* from
+   screen state + app-event gaps (`user_presence.present`). Never pretend
+   Android knows idle seconds.
+
+### Session shape & invariants (the contract)
+
+```python
+start_ts: float       # first event timestamp of the block
+end_ts: float         # next transition start (or last event + poll interval)
+duration_s: float     # end - start (Windows); UsageStats sums (Android)
+app_key: str          # process name (Windows) / package name (Android)
+payload: dict         # merged metadata (title, app_name, ...)
+session_type: str     # "foreground" — the only type today
+```
+
+Invariants to preserve when re-implementing:
+
+- One session per contiguous foreground block per app; no overlaps, no
+  gaps for the same app.
+- `end_ts >= start_ts`; `duration_s = end_ts - start_ts` unless Android
+  UsageStats is authoritative.
+- `device_id` + `platform` carried from the events the session was built
+  from.
+
+### Reconstruction recipe (the "cleaning" you will re-implement)
 
 Per ADR-0002, sessions are derived and idempotent. Reference recipe used by
 the reverted branch (re-implement freely, this is the shape):
@@ -265,3 +331,209 @@ the reverted branch (re-implement freely, this is the shape):
   with no producers yet; don't query them expecting data at v0.4.8.
 - Export (Settings → export) reads `raw_events` via `ExportService` — a
   ready-made example of the read path.
+
+## 8. Exploring the DB from the CLI (official `sqlite3` shell)
+
+You don't need any SQL GUI. SQLite ships an official command-line shell —
+`sqlite3.exe` — from the SQLite project itself. Everything below is that
+one tool, no custom scripts.
+
+### Install on Windows (the official tool)
+
+1. Go to <https://www.sqlite.org/download.html> → "Precompiled binaries
+   for Windows" → download the **tools** bundle:
+   `sqlite-tools-win-x64-<version>.zip` (contains `sqlite3.exe`; you do NOT
+   need the DLL or shell bundles).
+2. Extract the zip anywhere, e.g. `C:\sqlite\` (no installer, no admin
+   rights needed).
+3. (Optional) put it on PATH so `sqlite3` works from any terminal:
+   Settings → System → About → Advanced system settings → Environment
+   Variables → under *User variables* edit `Path` → New →
+   `C:\sqlite` → OK (reopen the terminal afterwards).
+4. Verify: `sqlite3 --version`.
+
+### Open the database
+
+The app may be running — that is fine (WAL readers don't block writers).
+Use `-readonly` so you can never accidentally modify data:
+
+```powershell
+sqlite3 -readonly "$env:APPDATA\Unscreen\data.db"
+```
+
+(or, without PATH: `& "C:\sqlite\sqlite3.exe" -readonly "$env:APPDATA\Unscreen\data.db"`)
+
+You are now at the `sqlite>` prompt. Exit anytime with `.quit`.
+
+### First look around
+
+```sql
+.tables                                  -- devices, raw_events, sessions, url_visits
+.schema raw_events                       -- DDL for one table (or .schema for all)
+.headers on                              -- show column names
+.mode column                             -- aligned table output (.mode box is prettier)
+PRAGMA user_version;                     -- schema version, expect 6
+PRAGMA journal_mode;                     -- expect 'wal'
+PRAGMA integrity_check;                  -- 'ok' = file is healthy
+```
+
+### Reading the data as the guide's queries intend
+
+Timestamps are UTC epoch seconds; render them human-readable with the
+`unixepoch` modifier, `localtime` for your timezone:
+
+```sql
+-- 10 most recent events, local time
+SELECT datetime(timestamp, 'unixepoch', 'localtime') AS local_time,
+       event_type, source, json_extract(payload, '$.app') AS app
+FROM raw_events ORDER BY id DESC LIMIT 10;
+
+-- Event counts per type (first sanity check that collection works)
+SELECT event_type, COUNT(*) AS n FROM raw_events GROUP BY event_type;
+
+-- "Events today" in YOUR local day (same definition as the status bar)
+SELECT COUNT(*) FROM raw_events
+WHERE timestamp >= strftime('%s', 'now', 'localtime', 'start of day');
+
+-- A day's foreground activity (any of the §5 recipes work verbatim here)
+SELECT datetime(timestamp, 'unixepoch', 'localtime') AS t,
+       json_extract(payload, '$.app') AS app
+FROM raw_events
+WHERE event_type = 'foreground_transition'
+  AND timestamp >= strftime('%s', 'now', 'localtime', 'start of day')
+ORDER BY timestamp;
+```
+
+Notes:
+- Modifiers are applied left-to-right: `'now','localtime','start of day'`
+  = local now → midnight local → epoch seconds. This matches the app's
+  "today" definition.
+- `json_extract(payload, '$.app')` is the SQL twin of the Python
+  `payload["app"]` the guide uses; quoted keys work the same
+  (`'$.duration_s'`, `'$.screen_on'`).
+- Paste the longer §5 queries straight into the prompt; they only need
+  `?` placeholders replaced with concrete epoch numbers
+  (e.g. `WHERE timestamp >= 1755000000 AND timestamp <= 1755086400`).
+
+### Exporting results to a file
+
+```sql
+.mode csv
+.output C:\temp\foreground_day.csv
+SELECT ...;            -- query as usual
+.output stdout         -- switch output back to the terminal
+```
+
+`.mode json` does the same for JSON.
+
+### Android (optional)
+
+The DB lives inside the app sandbox, so the only official path is the
+Android SDK's `adb` (from Android Studio's "Command line tools" or
+standalone platform-tools):
+
+```powershell
+adb exec-out run-as com.mycompany.unscreen cat files/Unscreen/data.db > data.db
+sqlite3 -readonly data.db
+```
+
+(`run-as` works on debug builds; on a production build the file is not
+readable this way.)
+
+### Zero-install fallback (you already have it)
+
+If you cannot download anything, `uv run python` has the official Python
+`sqlite3` module built in — a one-liner, not a tool:
+
+```powershell
+uv run python -c "import sqlite3; c=sqlite3.connect(r'$env:APPDATA\Unscreen\data.db'); print(c.execute(\"SELECT event_type, COUNT(*) FROM raw_events GROUP BY event_type\").fetchall())"
+```
+
+## 9. Other features worth knowing about
+
+### Event-sourced pipeline (the architecture in one paragraph)
+
+Everything in this DB is the middle of a pipeline (ADR-0002): platform
+APIs → typed, immutable, append-only events → `raw_events` (canonical
+store) → derived views (`sessions`, state blocks). Two consequences you
+will feel: **nothing in `raw_events` is ever edited** (if a row is wrong,
+the fix is a new event or a derived view, never an UPDATE), and **every
+row remembers its origin** (`source` column + `device_id`). When in doubt
+about a number, go back to the events that produced it — not the other way
+around.
+
+### Platform parity — what is precise vs. approximated (ADR-0001)
+
+| Concern | Windows | Android |
+|---|---|---|
+| Foreground app | Exact (2 s `GetForegroundWindow` poll) | Coarse (10 s usage events) |
+| Time-in-app | Derived from transition timestamps | UsageStats batches (~60 s), authoritative for durations |
+| Idle/away | Precise (`idle_transition` from `GetLastInputInfo`) | Approximated (`user_presence` boolean from screen state + event gaps) |
+| Screen state | Not observable (no events) | Exact (`screen_state_change` on↔off) |
+| Battery | `power_change` every 60 s (batteryless desktops → no rows) | `power_change` every 60 s |
+
+Windows and Android foreground schemas deliberately diverge (process/title
+vs. package/app_name) because they measure different things; AFK and power
+schemas are shared. This asymmetry is a design decision, not drift.
+
+### Device registry and multi-device
+
+`devices` is an append-only registry (`INSERT OR IGNORE` at startup): one
+row per physical device that ever ran the app, `is_current` marks the one
+you are on now. Every event and session carries `device_id`, so the schema
+supports multi-device timelines; nothing in the app aggregates across
+devices yet — query with `WHERE device_id = (SELECT device_id FROM devices
+WHERE is_current = 1)` when you only want this machine.
+
+### Automatic DB self-maintenance
+
+On startup and hourly the app runs `PRAGMA integrity_check` + auto-VACUUM
+(>20 % waste and >10 MB), and a corrupt file is quarantined as
+`data.db.corrupt-<ts>` and rebuilt from a fresh schema (old rows are not
+recovered — `raw_events` is the only source, and it is gone with the file).
+There is nothing to do by hand; if you ever see `data.db.corrupt-*` files,
+that is the app telling you it survived, not that you need to repair.
+
+### URL visits — optional enrichment, Windows only
+
+`url_visits` is an *optional* side-channel: when the Windows browser
+watcher has URL extraction enabled, `foreground_transition` payloads carry
+`browser`/`url`/`page_title`, and rows land in `url_visits` with
+`is_trackable` pre-computed. `event_id`/`session_id` backfills exist
+(`backfill_url_event_id()` / `backfill_url_session_id()`) so visits can be
+joined to the session that produced them once sessions are rebuilt — at
+v0.4.9 they are not populated.
+
+### Auto-pause and "collection-lived" timelines
+
+Android pauses collection while the screen is off; Windows collects only
+while the app runs. A gap in events is *data* (screen off / app closed),
+never corruption — the timeline you can build is "collection-lived" by
+design. The status bar makes this visible: `Auto-paused · screen off`
+state, and a watcher chip without a fresh tick time means that watcher
+stopped (or failed — it shows a `✗N` badge).
+
+### The status bar — your live verification feature (v0.4.9)
+
+`CollectionStatusBar` (bottom of the app shell) is the collection-health
+readout: state dot/label (collecting / paused / auto-paused / stopped),
+per-watcher chips (last tick in local time + failure badges), "N events
+today" (a `count_events(since=local midnight)` call) and the app version.
+Cross-check it with the CLI (§8): the state should match
+`collection_running`/`collection_paused` flags, chips should match recent
+`last_tick_at` values, and the counter should match
+`SELECT COUNT(*) ... strftime('%s','now','localtime','start of day')`.
+
+### Schema versioning and migration
+
+`PRAGMA user_version` (= `SCHEMA_VERSION = 6`) gates migrations: the app
+compares, migrates forward, and only then writes. Legacy per-device tables
+from pre-v0.5 are dropped by migration; if you open an old DB the first
+startup migrates it silently. There is no downgrade path — derived
+`user_version` changes are one-way.
+
+### The export path as a reference read
+
+Settings → export serializes `raw_events` via `ExportService` (CSV/JSON,
+local-time timestamps with UTC offset since v0.4.9) and is a working
+example of the read path — start there before writing your own export.
