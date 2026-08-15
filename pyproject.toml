@@ -1,6 +1,6 @@
 [project]
 name = "unscreen"
-version = "0.4.10-dev4"
+version = "0.4.10-dev5"
 description = "Cross-device app usage timeline tracker"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -28,8 +28,10 @@ dev = [
     "pyright>=1.1.0",
     "black>=26.5.1",
     "pytest-cov>=7.1.0",
+    "hypothesis>=6.165.9",
 ]
 e2e = [
+    "flet[test]>=0.86.2",
     "numpy>=2.2.6",
     "pillow>=12.3.0",
     "scikit-image>=0.25.2",
@@ -58,6 +60,7 @@ pythonpath = ["src", "tests"]
 testpaths = ["tests"]
 addopts = [
     "--ignore=tests/e2e",
+    "--ignore=tests/chaos",
     "--strict-markers",
     "--cov=src",
     "--cov-report=term-missing:skip-covered",
@@ -65,6 +68,7 @@ addopts = [
 ]
 markers = [
     "e2e: end-to-end UI tests driven by flet.testing (require a Flutter test host; run via the e2e dependency group)",
+    "chaos: adversarial mindless-user suite (callable fuzz, headless UI chaos, runtime chaos, e2e chaos; run via the chaos marker)",
 ]
 
 [tool.coverage.run]

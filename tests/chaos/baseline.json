@@ -1,0 +1,17 @@
+{
+  "_comment": "Known chaos-suite findings on the pinned baseline. Keys are stable (module.qualname:ExceptionType). To allowlist a new finding, copy its key from the chaos report (report.txt / report.json) into this list. A key that stops reproducing is reported as 'no longer reproducible' (a fix landed).",
+  "known": [
+    "UI.routing.RouteManager.view_for:AttributeError",
+    "core.collectors.windows.browser.analyze:AttributeError",
+    "core.storage.Storage.get_today_top_apps:OverflowError",
+    "core.update_checker.UpdateChecker:AttributeError",
+    "core.url_processor.UrlProcessor.normalize:AttributeError",
+    "utils.net.is_trackable_url:AttributeError",
+    "utils.net.normalize_url:AttributeError",
+    "utils.time_utils.fmt_timestamp:OverflowError",
+    "utils.versions.compare_versions:AttributeError",
+    "utils.versions.normalize_version:AttributeError",
+    "utils.versions.parse_version:AttributeError",
+    "utils.win32.acquire_instance_mutex:ArgumentError"
+  ]
+}

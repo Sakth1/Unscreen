@@ -136,9 +136,7 @@ class Updater:
     def _arm_relaunch(self, setup_pid: int) -> None:
         directory = install_dir()
         exe = (
-            directory / Path(sys.executable).name
-            if directory
-            else Path(sys.executable)
+            directory / Path(sys.executable).name if directory else Path(sys.executable)
         )
         watchdog = write_relaunch_watchdog(setup_pid, exe)
         spawn_watchdog(watchdog)
