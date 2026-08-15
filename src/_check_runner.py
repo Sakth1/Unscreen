@@ -26,7 +26,7 @@ def main() -> None:
 
     _step("1. uv sync (frozen)", "uv", "sync", "--frozen")
     _step(
-        "2. black formating",
+        "2. black formating (check only)",
         "uv",
         "run",
         "black",
@@ -34,6 +34,7 @@ def main() -> None:
         "tests/",
         "--target-version",
         "py312",
+        "--check",
     )
     ruff_args = ["uv", "run", "ruff", "check", "src/", "tests/"]
     if ruff_fix_args:

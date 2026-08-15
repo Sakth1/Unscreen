@@ -67,7 +67,8 @@ install once; subsequent runs restore in seconds. Note the workflow needs
 - Run `pytest -v --tb=long tests/test_storage.py -k "TestSchemaMigration"` to isolate.
 
 ### Tests fail in CI but pass locally
-- Run `uv run python scripts/ci/local_ci.py` — replicates the CI environment exactly (fresh checkout copy + fresh `uv sync --frozen` venv), so environment-only failures (stale `.pyc` caches masking compile-time warnings) surface locally. The pre-push hook runs this automatically.
+- Run `uv run python scripts/ci/local_ci.py` — replicates the CI environment (fresh checkout copy; venv reused while `uv.lock`/`pyproject.toml` are unchanged, mirroring the CI `actions/cache` key), so environment-only failures (stale `.pyc` caches masking compile-time warnings) surface locally. The lefthook-managed pre-push hook runs this automatically (`lefthook.yml`; install once with `uv tool install lefthook && lefthook install`).
+- Manual run: `lefthook run pre-push --force` (plain `lefthook run pre-push` skips commands when no push files are computed). Skip once: `LEFTHOOK=0 git push ...`.
 - CI uses shallow clone (`fetch-depth: 0` in prepare/lint/test jobs ensures full history).
 - CI runs on Windows Server 2022, Python 3.12.x (patch may differ).
 - Check for environment-dependent behavior (file paths, permissions, timezone).
