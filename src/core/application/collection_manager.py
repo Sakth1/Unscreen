@@ -20,9 +20,10 @@ class _EventBridge:
         self._storage = storage
         self._platform = platform
         self._last_app: dict[str, str | None] = {}
+        self._last_event_id: dict[str, int | None] = {}
 
     def __call__(self, tick: Tick) -> None:
-        ts = tick.timestamp.timestamp()
+        ts = int(round(tick.timestamp.timestamp() * 1000))
         watcher = tick.watcher
         data = tick.data
 
@@ -30,37 +31,69 @@ class _EventBridge:
         if event_type is None:
             return
 
+        if event_type == "app_usage_interval":
+            for interval in data.get("intervals") or []:
+                self._storage.write_event(
+                    event_type=event_type,
+                    timestamp=ts,
+                    payload=interval,
+                    source=watcher,
+                )
+            return
+
         if event_type == "foreground_transition":
             app_key = data.get("app") or data.get("package", "unknown")
+            url_visit = data.get("url_visit")
             if app_key == self._last_app.get(watcher):
+                event_id = self._last_event_id.get(watcher)
+                if url_visit and event_id is not None:
+                    self._write_url_visit(watcher, url_visit, ts, event_id)
                 return
             self._last_app[watcher] = app_key
-            self._storage.write_event(
+            payload = {k: v for k, v in data.items() if k != "url_visit"}
+            event_id = self._storage.write_event(
                 event_type=event_type,
                 timestamp=ts,
-                payload=data,
+                payload=payload,
                 source=watcher,
             )
+            self._last_event_id[watcher] = event_id
+            if url_visit:
+                self._write_url_visit(watcher, url_visit, ts, event_id)
             return
 
-        if event_type == "app_usage_interval":
-            intervals = data.get("intervals")
-            if intervals:
-                for interval in intervals:
-                    self._storage.write_event(
-                        event_type=event_type,
-                        timestamp=ts,
-                        payload=interval,
-                        source=watcher,
-                    )
-            return
-
-        self._storage.write_event(
+        event_id = self._storage.write_event(
             event_type=event_type,
             timestamp=ts,
             payload=data,
             source=watcher,
         )
+        self._last_event_id[watcher] = event_id
+
+    def _write_url_visit(
+        self, watcher: str, url_visit: dict, ts: int, event_id: int
+    ) -> None:
+        try:
+            self._storage.write_url_visit(
+                url=url_visit["url"],
+                seen_at=ts,
+                event_id=event_id,
+                browser=url_visit.get("browser"),
+                extraction_method=url_visit.get("extraction_method"),
+                confidence=url_visit.get("confidence", "high"),
+                scheme=url_visit.get("scheme"),
+                host=url_visit.get("host"),
+                domain=url_visit.get("domain"),
+                path=url_visit.get("path"),
+                is_trackable=url_visit.get("is_trackable", True),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to write url_visit for watcher %s (event %d, url %s)",
+                watcher,
+                event_id,
+                url_visit.get("url"),
+            )
 
 
 def _watcher_to_event_type(watcher: str) -> str | None:

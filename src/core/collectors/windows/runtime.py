@@ -37,9 +37,7 @@ class WindowsRuntime:
                 wc = WatcherConfig(name=name, interval_s=interval, enabled=True)
                 if name == "foreground":
                     fw = cast(type[ForegroundWatcher], cls)
-                    watchers.append(
-                        fw(wc, app_config=self._config, storage=self._storage)
-                    )
+                    watchers.append(fw(wc, app_config=self._config))
                 elif name == "afk":
                     aw = cast(type[AfkWatcher], cls)
                     watchers.append(aw(wc, app_config=self._config))
