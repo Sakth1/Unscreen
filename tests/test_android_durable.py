@@ -115,6 +115,7 @@ def _android_bridge(
     resolver.query.return_value = FakeCursor(
         rows=[(42,)] if existing_uri else [], columns=["_id"]
     )
+    resolver.delete.return_value = 1
 
     downloads = MagicMock()
     downloads.EXTERNAL_CONTENT_URI = "content://media/external_primary/downloads"
@@ -297,6 +298,49 @@ class TestRestore:
             AndroidDurableBackup(db_path), sdk_int=28, existing_uri=True
         ) as (backup, resolver, _):
             assert backup.restore_if_present() is False
+            resolver.query.assert_not_called()
+
+
+class TestDelete:
+    def test_deletes_backup_file(self, tmp_path):
+        db = _make_db(tmp_path)
+        with _android_env(AndroidDurableBackup(db), existing_uri=True) as (
+            backup,
+            resolver,
+            _,
+        ):
+            assert backup.delete() is True
+            resolver.delete.assert_called_once()
+
+    def test_delete_without_backup_returns_false(self, tmp_path):
+        db = _make_db(tmp_path)
+        with _android_env(AndroidDurableBackup(db), existing_uri=False) as (
+            backup,
+            resolver,
+            _,
+        ):
+            assert backup.delete() is False
+            resolver.delete.assert_not_called()
+
+    def test_delete_failure_is_silent(self, tmp_path):
+        db = _make_db(tmp_path)
+        jnius, activity, resolver, _ = _android_bridge(existing_uri=True)
+        resolver.delete.side_effect = RuntimeError("delete boom")
+        backup = AndroidDurableBackup(db)
+        with (
+            patch.dict(sys.modules, {"jnius": jnius}),
+            patch("core.storage.android_durable.get_activity", return_value=activity),
+        ):
+            assert backup.delete() is False
+
+    def test_delete_skips_below_api_29(self, tmp_path):
+        db = _make_db(tmp_path)
+        with _android_env(AndroidDurableBackup(db), sdk_int=28) as (
+            backup,
+            resolver,
+            _,
+        ):
+            assert backup.delete() is False
             resolver.query.assert_not_called()
 
 

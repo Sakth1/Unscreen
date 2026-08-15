@@ -53,19 +53,19 @@ class TestFixturesAvailable:
     def test_in_memory_db_stores_events(self, in_memory_db, make_tick):
         in_memory_db.write_event(
             event_type="foreground_transition",
-            timestamp=1000.0,
+            timestamp=1000,
             payload={"app": "Code.exe"},
             source="foreground",
         )
         in_memory_db.write_event(
             event_type="idle_transition",
-            timestamp=1100.0,
+            timestamp=1100,
             payload={"status": "active"},
             source="afk",
         )
         in_memory_db.write_event(
             event_type="foreground_transition",
-            timestamp=1200.0,
+            timestamp=1200,
             payload={"app": "Code.exe"},
             source="foreground",
         )
