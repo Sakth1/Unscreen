@@ -139,12 +139,15 @@ class CollectionStatusBar(ft.Container):
             )
         return parts
 
-    def _today_start_local(self) -> float:
-        return (
-            datetime.now()
-            .astimezone()
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp()
+    def _today_start_local(self) -> int:
+        return int(
+            (
+                datetime.now()
+                .astimezone()
+                .replace(hour=0, minute=0, second=0, microsecond=0)
+                .timestamp()
+            )
+            * 1000
         )
 
     def _refresh(self) -> None:

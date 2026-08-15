@@ -21,13 +21,15 @@ def day_start_ms(now_ms: int) -> int:
         return now_ms
 
 
-def fmt_timestamp(ts: float) -> str:
-    """Format a Unix epoch seconds timestamp in local time with tz offset."""
+def fmt_timestamp(ts: int) -> str:
+    """Format a Unix epoch milliseconds timestamp in local time with tz offset."""
     try:
-        local = datetime.datetime.fromtimestamp(ts).astimezone()
+        local = datetime.datetime.fromtimestamp(ts / _MS_PER_S).astimezone()
     except (OSError, OverflowError, ValueError):
         logger.debug("Failed to localize %r, falling back to UTC", ts)
-        local = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+        local = datetime.datetime.fromtimestamp(
+            ts / _MS_PER_S, tz=datetime.timezone.utc
+        )
     return local.strftime("%Y-%m-%d %H:%M:%S.%f%z")
 
 
@@ -35,5 +37,5 @@ def utc_now() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def utc_timestamp() -> float:
-    return datetime.datetime.now(datetime.timezone.utc).timestamp()
+def utc_timestamp() -> int:
+    return int(datetime.datetime.now(datetime.timezone.utc).timestamp() * _MS_PER_S)
