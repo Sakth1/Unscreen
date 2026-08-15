@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import flet as ft
 
 from core.state.app_state import get_app_state
-from utils.models import NavigationChangeData, NavigationDestination
+from UI.layout.models import NavigationChangeData, NavigationDestination
 
 if TYPE_CHECKING:
     from UI.custom.navigation_bar import CustomNavigationBar

@@ -20,52 +20,58 @@ Cross-device app usage timeline tracker with idle detection. Privacy-first, loca
                      │                     │                       │
                      └─────────────────────┼───────────────────────┘
                                            ▼
-                                     TickBus
-                                   (async pub/sub)
-                                    ┌──┬──┐
-                                    │  │  │
-                                    ▼  ▼  ▼
-                               Storage   UI
-                              (APSW)   (Flet)
+                                      TickBus
+                                    (async pub/sub)
+                                     ┌──┬──┐
+                                     │  │  │
+                                     ▼  ▼  ▼
+                                Storage   UI
+                               (sqlite3) (Flet)
 ```
 
 ## Data Model
 
 ### Tick (unit of collection)
 
-Every watcher emits a `Tick` on each poll cycle. Adjacent ticks with identical data are merged into sessions at write time (pulse-merge, like ActivityWatch).
+Every watcher emits a `Tick` on each poll cycle. The event bridge (`_EventBridge` in `core/application/collection_manager.py`) turns every distinct tick into one row in `raw_events` — no write-time merging.
 
 ```python
 @dataclass
 class Tick:
-    id: UUID
-    watcher: str        # "foreground" | "afk" | "power"
+    watcher: str        # "foreground" | "afk" | "power" | "android_*"
     timestamp: datetime  # UTC
     data: dict           # watcher-specific payload
 ```
 
 ### Watcher Schemas
 
-| Watcher | Interval | Data | Merge Key |
-|---|---|---|---|
-| `foreground` | 2s | `{app, title, [browser], [page_title], [inferred_domain]}` | all fields |
-| `afk` | 5s | `{status: "active"\|"idle"\|"away", idle_seconds}` | `status` only |
-| `power` | 60s | `{battery_pct, charging}` | all fields |
+| Watcher | Interval | Payload |
+|---|---|---|
+| `foreground` (Windows) | 2s | `{app, title}` + optional `url_visit` attachment |
+| `afk` | 5s | `{status: "active"\|"idle"\|"away", idle_seconds}` |
+| `power` | 60s | `{battery_pct, charging}` |
+| `android_foreground` | 5s | `{package}` |
+| `android_app_usage` | 60s | `{intervals: [{package, start, end, ...}]}` (fan-out into one event per interval) |
+| `android_afk` | 30s | `{present}` → `user_presence` |
+| `android_power` | 60s | `{battery_pct, charging}` |
 
-Browser info (`browser`, `page_title`, `inferred_domain`, `url`) is populated when the foreground window is a known browser (Chrome, Firefox, Edge, Brave, Opera, Vivaldi). When `url_extraction_enabled` (default: on), the actual active tab URL is captured via UIA (Windows accessibility API). Falls back to browser session files if UIA is unavailable. Non-trackable URLs (about:blank, chrome://newtab, etc.) are filtered out. When a real URL is present, `inferred_domain` is omitted as redundant.
+Browser info never lands in the `foreground_transition` payload. When the foreground window is a known browser (Chrome, Firefox, Edge, Brave, Opera, Vivaldi) and URL extraction is enabled (default: on), the collector attaches a `url_visit` dict — `{url, browser, scheme, host, domain, path, extraction_method, confidence, is_trackable}` — to the tick on URL changes only. The event bridge persists it into the `url_visits` table, owned by the `foreground_transition` event that started the browser session (a fresh event on app change, the cached owning event on tab change). When extraction fails, the title-inference fallback is recorded as a `url_visit` with `confidence="low"` instead of polluting the event payload. Non-trackable URLs (`about:blank`, `chrome://newtab`, …) are filtered out.
 
 ## Database Schema
 
 **Location:** `%APPDATA%\Unscreen\data.db`
 
-**Engine:** SQLite via APSW, WAL journal mode.
+**Engine:** SQLite (stdlib `sqlite3`), WAL journal mode. Schema v7 (`PRAGMA user_version = 7`).
+
+All devices share one set of tables — no per-device tables. Device identity lives **once** in `devices`; event rows reference it by a small integer FK. Timestamps are **integer milliseconds** (Unix epoch UTC).
 
 ### `devices` — device registry (shared across platforms)
 
 ```sql
 CREATE TABLE IF NOT EXISTS devices (
-    device_id   TEXT PRIMARY KEY,   -- UUID from MachineGuid or generated
-    hostname    TEXT,               -- "DESKTOP-A1VV4AH"
+    id          INTEGER PRIMARY KEY AUTOINCREMENT, -- stable integer key for FK references
+    device_id   TEXT NOT NULL UNIQUE,              -- UUID from MachineGuid or generated
+    hostname    TEXT,
     platform    TEXT,               -- "windows" | "android"
     first_seen  TEXT NOT NULL,      -- ISO 8601 UTC
     last_seen   TEXT,               -- updated on each startup
@@ -73,55 +79,97 @@ CREATE TABLE IF NOT EXISTS devices (
 );
 ```
 
-### `events_{short_id}` — per-device event storage
+### `event_types` / `sources` — dictionary tables
 
-One table per device (8-char prefix of device UUID). Future sync: each device writes to its own table, no ID conflicts.
+A handful of distinct values each, dictionary-encoded into small integer FKs:
 
 ```sql
-CREATE TABLE IF NOT EXISTS events_ea56c63f (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    watcher    TEXT NOT NULL,       -- "foreground" | "afk" | "power"
-    timestamp  REAL NOT NULL,       -- Unix epoch seconds (UTC)
-    duration   REAL DEFAULT 0,     -- seconds, rounded to 2 decimals
-    data       TEXT NOT NULL        -- JSON payload (watcher-specific)
+CREATE TABLE IF NOT EXISTS event_types (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS sources      (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+```
+
+### `raw_events` — canonical event log (shared across devices)
+
+```sql
+CREATE TABLE IF NOT EXISTS raw_events (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_fk     INTEGER NOT NULL REFERENCES devices(id),
+    event_type_fk INTEGER NOT NULL REFERENCES event_types(id),
+    source_fk     INTEGER NOT NULL REFERENCES sources(id),
+    timestamp     INTEGER NOT NULL,          -- Unix epoch ms (UTC) — when the event occurred
+    collected_at  INTEGER NOT NULL,          -- Unix epoch ms (UTC) — when we observed it
+    payload       TEXT NOT NULL,             -- JSON payload, type-specific
+    payload_hash  BLOB NOT NULL              -- 16-byte blake2b of canonical payload JSON
 );
-
-CREATE INDEX IF NOT EXISTS idx_ea56c63f_watcher_ts
-    ON events_ea56c63f(watcher, timestamp);
 ```
 
-### Merge Algorithm
+`UNIQUE(device_fk, event_type_fk, timestamp, payload_hash)` makes sync re-imports idempotent: Android's same-millisecond `app_usage_interval` fan-out is admitted (distinct payloads → distinct hashes), identical re-imports are rejected.
 
-On each `on_tick()` call:
+### `sessions` — derived sessions (shared, not per-device)
 
+Sessions are reconstructed deterministically from `raw_events` (reconstructor planned). Written via `write_canonical_session()`.
+
+```sql
+CREATE TABLE IF NOT EXISTS sessions (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_fk     INTEGER NOT NULL REFERENCES devices(id),
+    start_ts      INTEGER NOT NULL,          -- Unix epoch ms (UTC)
+    end_ts        INTEGER,
+    duration_s    REAL,
+    app_key       TEXT NOT NULL,
+    payload       TEXT NOT NULL,
+    session_type  TEXT DEFAULT 'foreground'
+);
 ```
-1. Get last event for this watcher (ORDER BY timestamp DESC LIMIT 1)
-2. If no last event → INSERT with duration = 0
-3. Else:
-   a. Compare data by merge key (full dict or specific keys)
-   b. If data matches AND tick timestamp <= last.timestamp + last.duration + pulsetime:
-        UPDATE last event's duration = max(last.duration, tick.ts - last.ts)
-   c. Else:
-        INSERT new event with duration = 0
+
+### `url_visits` — URL visit log (Windows only)
+
+`event_id` is populated at write time by the event bridge and is NOT NULL — it always points at the owning `foreground_transition`. `session_id` is filled in later by the session reconstructor (derived data, nullable).
+
+```sql
+CREATE TABLE IF NOT EXISTS url_visits (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_fk        INTEGER NOT NULL REFERENCES devices(id),
+    event_id         INTEGER NOT NULL REFERENCES raw_events(id),
+    session_id       INTEGER REFERENCES sessions(id),
+    url              TEXT    NOT NULL,
+    browser          TEXT,
+    scheme           TEXT,
+    host             TEXT,
+    domain           TEXT,
+    path             TEXT,
+    extraction_method TEXT,
+    confidence        TEXT DEFAULT 'high',
+    is_trackable      INTEGER DEFAULT 1,
+    seen_at          INTEGER NOT NULL,       -- Unix epoch ms (UTC)
+    collected_at     INTEGER NOT NULL
+);
 ```
 
-This produces timeline sessions without storing redundant ticks.
+`UNIQUE(device_fk, event_id, url)` collapses revisits of the same URL within one browser session into a single row (`write_url_visit` skips duplicates silently).
 
-| Watcher | PulseTime |
-|---|---|
-| `foreground` | 3s |
-| `afk` | 10s |
-| `power` | 120s |
+### `sync_cursors` — sync high-water marks
+
+```sql
+CREATE TABLE IF NOT EXISTS sync_cursors (
+    remote_device_id TEXT PRIMARY KEY,
+    last_synced_at   INTEGER NOT NULL        -- Unix epoch ms (UTC)
+);
+```
+
+### Data Cleaning / Schema Reset
+
+The app is early-stage: schemas still evolve, and **pre-v7 databases are not migrated — they are wiped and recreated fresh** on first launch after the upgrade. This is a deliberate policy: no data-migration code, no half-broken legacy data. The wipe also deletes the Android durable backup (`Download/Unscreen-data-backup/unscreen.db`) so a stale copy cannot resurrect old data on the next install. Data accumulated on v7+ survives updates. "Clear all data" in Settings wipes events, sessions, url visits, and sync cursors.
 
 ### Storage growth
 
-~110 events/day = ~40 KB/day = ~14 MB per year.
+~110 raw events/day ≈ ~40 KB/day ≈ ~14 MB per year (per device, before the payload_hash column is accounted for).
 
 ## Watcher Implementation Details
 
 ### ForegroundWatcher (composite)
 
-Polls `GetForegroundWindow` + `GetWindowText` + `GetWindowThreadProcessId` + `psutil.Process().name()` every 2s. If process is a known browser, passes result through `BrowserAnalyzer` to extract page title and infer domain.
+Polls `GetForegroundWindow` + `GetWindowText` + `GetWindowThreadProcessId` + `psutil.Process().name()` every 2s. If process is a known browser, passes result through `BrowserAnalyzer` to extract page title, infer domain, and (when extraction is enabled) the active tab URL via UIA (Windows accessibility API), falling back to browser session files. URL data is attached to the tick as `url_visit` — see Watcher Schemas.
 
 ### AfkWatcher
 
@@ -184,8 +232,8 @@ The project uses a layered validation architecture to catch failures before runt
 | Flet API compat | `pytest tests/test_flet_api_compat.py` | Yes | Removed/renamed APIs, invalid kwargs, deprecation |
 | Wiring validation | `python scripts/validate_wiring.py` | Yes | Missing callback methods (`_on_dismiss`-class bugs) |
 | Startup smoke | `pytest tests/test_startup.py` | Yes | Construction-time exceptions in any component |
-| Unit tests | `pytest tests/` (285+ tests) | Yes | Component logic (storage, scheduler, collectors, etc.) |
-| Cloud CI replication | `python scripts/ci/local_ci.py` | Yes | Environment-only failures masked by local `.pyc` caches (fresh checkout + fresh venv) |
+| Unit tests | `pytest tests/` (660+ tests) | Yes | Component logic (storage, scheduler, collectors, etc.) |
+| Cloud CI replication | `python scripts/ci/local_ci.py` | Yes | Environment-only failures masked by local `.pyc` caches (fresh checkout copy + fresh venv) |
 
 Run locally:
 ```bash
@@ -196,6 +244,8 @@ uv run python scripts/validate_wiring.py
 uv run python scripts/ci/local_ci.py   # full cloud-CI replication (also runs on pre-push)
 ```
 
+The pre-push hook is managed by [lefthook](https://lefthook.dev) (`lefthook.yml`; install with `uv tool install lefthook && lefthook install`) and runs the cloud-CI replication on every push. Manual run: `lefthook run pre-push --force`. Skip once: `LEFTHOOK=0 git push ...`.
+
 ## Dependencies
 
 flet, orjson, psutil, rich
@@ -204,7 +254,7 @@ flet, orjson, psutil, rich
 
 ## Sync (Planned)
 
-Each device writes to its own `events_{id}` table. Sync copies remote tables as read-only replicas. No ID conflict — UUIDs and per-device table names are the namespace. `UNION ALL` across tables for cross-device timeline queries.
+All devices write into the single shared `raw_events` table, namespaced by `device_fk`. Sync exports each device's rows after its high-water mark (tracked in `sync_cursors`); the receiving device imports them as-is. Re-imports are idempotent via `UNIQUE(device_fk, event_type_fk, timestamp, payload_hash)`. Cross-device timeline queries are plain `WHERE device_fk IN (...)` — no table gymnastics.
 
 ## Browser URL Extraction (prototype)
 

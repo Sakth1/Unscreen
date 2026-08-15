@@ -31,7 +31,7 @@ class TestDestinationConstruction:
 
 class TestDestinationMetrics:
     def test_apply_metrics_sets_padding_and_spacing(self):
-        from utils.models import SecondaryDrawerMetrics
+        from UI.layout.models import SecondaryDrawerMetrics
 
         dest = SecondaryNavigationDestination(icon="HOME", label="App Info")
         metrics = SecondaryDrawerMetrics(
@@ -46,7 +46,7 @@ class TestDestinationMetrics:
         assert dest.content.alignment is not None
 
     def test_apply_metrics_centers_icon_when_label_hidden(self):
-        from utils.models import SecondaryDrawerMetrics
+        from UI.layout.models import SecondaryDrawerMetrics
 
         dest = SecondaryNavigationDestination(icon="HOME", label="App Info")
         dest.toggle_label()
@@ -100,7 +100,7 @@ class TestPanelConstruction:
         assert events == []
 
     def test_select_index_fires_on_change_with_route_data(self):
-        from utils.models import SecondaryNavigationChangeData
+        from UI.layout.models import SecondaryNavigationChangeData
 
         first = SecondaryNavigationDestination(
             icon="HOME", label="App Info", route="/settings/app-info"

@@ -10,16 +10,16 @@ concurrency:
 
 permissions:
   contents: write
-  actions: read
+  actions: write # actions/cache save (venv + setup-uv) requires write on the actions scope
 
 defaults:
   run:
     shell: pwsh
 
 jobs:
-  lint:
+  prepare:
     runs-on: windows-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
 
     steps:
       - uses: actions/checkout@v6
@@ -36,6 +36,42 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen
 
+      - name: Cache virtual environment
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: unscreen-venv-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            unscreen-venv-${{ runner.os }}-
+
+  lint:
+    runs-on: windows-latest
+    needs: prepare
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+          python-version: "3.12"
+
+      - name: Restore cached environment
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: unscreen-venv-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            unscreen-venv-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
       - name: Run ruff check
         run: uv run ruff check src/ tests/
 
@@ -44,7 +80,7 @@ jobs:
 
   test:
     runs-on: windows-latest
-    needs: lint
+    needs: prepare
     timeout-minutes: 10
 
     steps:
@@ -58,6 +94,14 @@ jobs:
           enable-cache: true
           cache-dependency-glob: "uv.lock"
           python-version: "3.12"
+
+      - name: Restore cached environment
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: unscreen-venv-${{ runner.os }}-${{ hashFiles('uv.lock', 'pyproject.toml') }}
+          restore-keys: |
+            unscreen-venv-${{ runner.os }}-
 
       - name: Install dependencies
         run: uv sync --frozen
@@ -216,7 +260,7 @@ jobs:
 
       - name: Build Android APK
         run: |
-          flet build apk --yes --compile-packages --skip-flutter-doctor --no-rich-output
+          flet build apk --yes --build-number "${{ github.run_number }}" --skip-flutter-doctor --no-rich-output
 
       - name: Decode Android keystore
         shell: bash
@@ -271,6 +315,11 @@ jobs:
         shell: bash
         run: |
           "${ANDROID_SDK_ROOT}/build-tools/35.0.0/apksigner" verify signed.apk
+
+      - name: Print signing certificate
+        shell: bash
+        run: |
+          "${ANDROID_SDK_ROOT}/build-tools/35.0.0/apksigner" verify --print-certs signed.apk
 
       - name: Collect APK
         id: collect

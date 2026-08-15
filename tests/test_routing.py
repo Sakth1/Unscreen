@@ -10,8 +10,8 @@ from __future__ import annotations
 import flet as ft
 
 from core.state.app_state import reset_app_state
+from UI.layout.models import NavigationChangeData, NavigationDestination
 from UI.routing import RouteManager
-from utils.models import NavigationChangeData, NavigationDestination
 
 DEFAULT_ROUTES = ["/dashboard", "/timeline", "/analytics", "/settings"]
 

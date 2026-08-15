@@ -9,8 +9,8 @@ _RAW_ROW = {
     "device_id": "dev1",
     "platform": "android",
     "event_type": "app_usage_interval",
-    "timestamp": 1700000000.0,
-    "collected_at": 1700000010.0,
+    "timestamp": 1700000000000,
+    "collected_at": 1700000010000,
     "payload": {"key": "val"},
     "source": "android_app_usage",
 }

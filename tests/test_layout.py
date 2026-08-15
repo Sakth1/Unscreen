@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 
 from UI.layout.layout_resolver import app_layout_resolver
-from utils.models import (
+from UI.layout.models import (
     AppLayout,
     NavigationPattern,
     Orientation,

@@ -6,8 +6,8 @@ from core.collectors.windows.afk import AfkWatcher
 from core.collectors.windows.foreground import ForegroundWatcher
 from core.collectors.windows.power import PowerWatcher
 from core.config_manager import ConfigManager
+from core.models import WatcherConfig
 from core.storage import Storage
-from utils.models import WatcherConfig
 
 logger = logging.getLogger(__name__)
 
@@ -37,9 +37,7 @@ class WindowsRuntime:
                 wc = WatcherConfig(name=name, interval_s=interval, enabled=True)
                 if name == "foreground":
                     fw = cast(type[ForegroundWatcher], cls)
-                    watchers.append(
-                        fw(wc, app_config=self._config, storage=self._storage)
-                    )
+                    watchers.append(fw(wc, app_config=self._config))
                 elif name == "afk":
                     aw = cast(type[AfkWatcher], cls)
                     watchers.append(aw(wc, app_config=self._config))

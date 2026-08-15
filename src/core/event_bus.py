@@ -1,7 +1,9 @@
+"""In-process event bus fanning watcher ticks out to subscribers."""
+
 import logging
 from collections.abc import Callable
 
-from utils.models import Tick
+from core.models import Tick
 
 logger = logging.getLogger(__name__)
 

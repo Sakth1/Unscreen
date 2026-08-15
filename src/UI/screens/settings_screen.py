@@ -3,9 +3,9 @@ from typing import Any
 
 import flet as ft
 
+from UI.layout.models import NavigationDestination
 from UI.screens.base_screen import BaseScreen
 from UI.screens.settings import AppInfo, DataDiagnostics, General
-from utils.models import NavigationDestination
 
 logger = logging.getLogger(__name__)
 

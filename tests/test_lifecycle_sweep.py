@@ -19,14 +19,13 @@ from sweep_helpers import mock_page
 
 from core.application.collection_manager import CollectionManager, _EventBridge
 from core.config_manager import ConfigManager
-from utils.models import (
+from core.models import Tick, WatcherConfig
+from UI.layout.models import (
     NavigationPattern,
-    OSType,
     ScreenFormFactor,
     SecondaryNavigationPattern,
-    Tick,
-    WatcherConfig,
 )
+from utils.platform import OSType
 
 _EVENT_TIMEOUT_S = 5.0
 
@@ -99,13 +98,158 @@ class TestEventBridge:
         assert events[0]["payload"]["app"] == "A"
 
     def test_other_watcher_types_mapped(self, in_memory_db):
+        from datetime import datetime, timedelta, timezone
+
         bridge = _EventBridge(in_memory_db, "windows")
-        bridge(Tick(watcher="afk", data={"status": "idle"}))
-        bridge(Tick(watcher="android_afk", data={"present": False}))
-        bridge(Tick(watcher="power", data={"on_ac": True}))
-        bridge(Tick(watcher="android_power", data={"on_ac": True}))
+        t0 = datetime.now(timezone.utc)
+        bridge(Tick(watcher="afk", data={"status": "idle"}, timestamp=t0))
+        bridge(
+            Tick(
+                watcher="android_afk",
+                data={"present": False},
+                timestamp=t0 + timedelta(milliseconds=1),
+            )
+        )
+        bridge(
+            Tick(
+                watcher="power",
+                data={"on_ac": True},
+                timestamp=t0 + timedelta(milliseconds=2),
+            )
+        )
+        bridge(
+            Tick(
+                watcher="android_power",
+                data={"on_ac": True},
+                timestamp=t0 + timedelta(milliseconds=3),
+            )
+        )
         types = {e["event_type"] for e in in_memory_db.get_raw_events()}
         assert types == {"idle_transition", "user_presence", "power_change"}
+
+    @staticmethod
+    def _url_visit(url: str, **overrides) -> dict:
+        visit = {
+            "url": url,
+            "browser": "brave",
+            "extraction_method": "uia",
+            "confidence": "high",
+            "scheme": "https",
+            "host": "example.com",
+            "domain": "example.com",
+            "path": "/",
+            "is_trackable": True,
+        }
+        visit.update(overrides)
+        return visit
+
+    def test_url_visit_written_with_fresh_event_id(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "windows")
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={
+                    "app": "brave.exe",
+                    "url_visit": self._url_visit("https://a.com"),
+                },
+            )
+        )
+        events = in_memory_db.get_raw_events()
+        assert len(events) == 1
+        assert "url_visit" not in events[0]["payload"]
+        visits = in_memory_db.get_url_visits()
+        assert len(visits) == 1
+        assert visits[0]["event_id"] == events[0]["id"]
+        assert visits[0]["url"] == "https://a.com"
+        assert visits[0]["browser"] == "brave"
+
+    def test_url_visit_reuses_cached_event_id_on_tab_change(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "windows")
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={
+                    "app": "brave.exe",
+                    "url_visit": self._url_visit("https://a.com"),
+                },
+            )
+        )
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={
+                    "app": "brave.exe",
+                    "url_visit": self._url_visit("https://b.com"),
+                },
+            )
+        )
+        events = in_memory_db.get_raw_events()
+        assert len(events) == 1, "tab change must not emit a new raw event"
+        visits = in_memory_db.get_url_visits()
+        assert len(visits) == 2
+        assert visits[0]["event_id"] == visits[1]["event_id"] == events[0]["id"]
+
+    def test_url_visit_on_app_change_gets_fresh_event(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "windows")
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={
+                    "app": "brave.exe",
+                    "url_visit": self._url_visit("https://a.com"),
+                },
+            )
+        )
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={"app": "Code.exe", "url_visit": self._url_visit("https://c.com")},
+            )
+        )
+        events = in_memory_db.get_raw_events()
+        assert len(events) == 2
+        visits = in_memory_db.get_url_visits()
+        assert len(visits) == 2
+        assert visits[0]["event_id"] != visits[1]["event_id"]
+
+    def test_duplicate_url_in_same_session_does_not_crash(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "windows")
+        for _ in range(2):
+            bridge(
+                Tick(
+                    watcher="foreground",
+                    data={
+                        "app": "brave.exe",
+                        "url_visit": self._url_visit("https://a.com"),
+                    },
+                )
+            )
+        visits = in_memory_db.get_url_visits()
+        assert len(visits) == 1
+
+    def test_low_confidence_fallback_url_visit(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "windows")
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={
+                    "app": "brave.exe",
+                    "url_visit": self._url_visit(
+                        "https://example.com", extraction_method=None, confidence="low"
+                    ),
+                },
+            )
+        )
+        visits = in_memory_db.get_url_visits()
+        assert visits[0]["confidence"] == "low"
+        assert visits[0]["extraction_method"] is None
+
+    def test_timestamps_are_milliseconds(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "windows")
+        bridge(Tick(watcher="afk", data={"status": "idle"}))
+        ts = in_memory_db.get_raw_events()[0]["timestamp"]
+        assert isinstance(ts, int)
+        assert ts > 1_700_000_000_000
 
 
 class TestCollectionEndToEnd:
@@ -478,7 +622,7 @@ class TestAppHeadlessBoot:
 
     def test_secondary_panel_select_navigates_to_section(self):
         from app import App
-        from utils.models import SecondaryNavigationChangeData
+        from UI.layout.models import SecondaryNavigationChangeData
 
         app = App(self._page(1280, 800))
         app.route_manager.navigate("/settings")

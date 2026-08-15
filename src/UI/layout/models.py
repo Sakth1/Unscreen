@@ -1,13 +1,13 @@
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
+"""Models owned by the UI layer: responsive layout and navigation chrome.
+
+These describe how the shell sizes and arranges navigation controls for the
+current window; nothing outside ``UI`` should need them. The layout resolver
+(``UI.layout.layout_resolver``) produces :class:`AppLayout` instances.
+"""
+
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
-
-
-class OSType(Enum):
-    UNKNOWN = 0
-    WINDOWS = 1
-    ANDROID = 2
 
 
 class ScreenFormFactor(Enum):
@@ -54,32 +54,6 @@ class SecondaryNavigationPattern(Enum):
 class Orientation(Enum):
     PORTRAIT = 0
     LANDSCAPE = 1
-
-
-@dataclass
-class Tick:
-    watcher: str = ""
-    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-    data: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class WatcherConfig:
-    name: str = ""
-    interval_s: float = 1.0
-    enabled: bool = True
-
-
-@dataclass
-class RawEvent:
-    id: int = 0
-    device_id: str = ""
-    platform: str = ""
-    event_type: str = ""
-    timestamp: float = 0.0
-    collected_at: float = 0.0
-    payload: dict[str, Any] = field(default_factory=dict)
-    source: str = ""
 
 
 @dataclass(frozen=True)

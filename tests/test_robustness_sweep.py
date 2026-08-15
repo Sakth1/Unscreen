@@ -13,9 +13,11 @@ from unittest.mock import MagicMock, patch
 
 from sweep_helpers import mock_page
 
+from core.event_bus import TickBus
+from core.models import Tick
 from core.storage import Storage
-from utils.bus import TickBus
-from utils.models import OSType, ScreenFormFactor, Tick
+from UI.layout.models import ScreenFormFactor
+from utils.platform import OSType
 
 
 class TestStartupUpdateCheck:
@@ -94,7 +96,7 @@ class TestCorruptDatabaseRecovery:
             assert storage.check_integrity()["ok"]
             storage.write_event(
                 event_type="idle_transition",
-                timestamp=1000.0,
+                timestamp=1000000,
                 payload={"status": "active"},
                 source="afk",
             )
@@ -153,10 +155,10 @@ class TestStorageConcurrency:
         s2 = Storage(db_path=db)
         try:
             s1.write_event(
-                event_type="idle_transition", timestamp=1.0, payload={}, source="afk"
+                event_type="idle_transition", timestamp=1000, payload={}, source="afk"
             )
             s2.write_event(
-                event_type="idle_transition", timestamp=2.0, payload={}, source="afk"
+                event_type="idle_transition", timestamp=2000, payload={}, source="afk"
             )
             assert len(s1.get_raw_events()) == 2
             assert len(s2.get_raw_events()) == 2

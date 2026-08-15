@@ -73,6 +73,24 @@ class AndroidDurableBackup:
             logger.exception("Durable Android backup sync failed")
             return False
 
+    def delete(self) -> bool:
+        """Delete the durable backup so it cannot resurrect a wiped database."""
+        if not self.is_available():
+            return False
+        try:
+            resolver = get_activity().getContentResolver()
+            uri = self._find_backup_uri(resolver)
+            if uri is None:
+                return False
+            deleted = resolver.delete(uri, None, None)
+            if deleted > 0:
+                logger.info("Deleted durable Android backup %s", describe())
+                return True
+            return False
+        except Exception:
+            logger.exception("Durable Android backup delete failed")
+            return False
+
     def restore_if_present(self) -> bool:
         if not self.is_available():
             return False

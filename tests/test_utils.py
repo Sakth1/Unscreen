@@ -2,9 +2,8 @@ import re
 import sys
 
 from utils.files import remove_file, timestamped_filename
-from utils.models import OSType
 from utils.net import extract_domain, is_trackable_url, normalize_url
-from utils.platform import detect_os, is_android, is_packaged
+from utils.platform import OSType, detect_os, is_android, is_packaged
 from utils.time_utils import day_start_ms, fmt_timestamp, get_current_time_ms
 from utils.versions import compare_versions, normalize_version
 
@@ -85,14 +84,16 @@ class TestTimeUtils:
     def test_fmt_timestamp_uses_local_time_with_offset(self):
         from datetime import datetime
 
-        ts = 1700000000.0
+        ts = 1700000000000
         expected = (
-            datetime.fromtimestamp(ts).astimezone().strftime("%Y-%m-%d %H:%M:%S.%f%z")
+            datetime.fromtimestamp(ts / 1000)
+            .astimezone()
+            .strftime("%Y-%m-%d %H:%M:%S.%f%z")
         )
         assert fmt_timestamp(ts) == expected
 
     def test_fmt_timestamp_falls_back_to_utc_on_localize_error(self):
-        assert fmt_timestamp(0.0).endswith("+0000")
+        assert fmt_timestamp(0).endswith("+0000")
 
 
 class TestFiles:
@@ -114,7 +115,7 @@ class TestInstanceMutex:
     def test_not_available_off_windows(self):
         from unittest.mock import patch
 
-        from utils.platform import acquire_instance_mutex
+        from utils.win32 import acquire_instance_mutex
 
         with patch("utils.platform.sys.platform", "linux"):
             assert acquire_instance_mutex("AnyName") is None
@@ -128,7 +129,7 @@ class TestInstanceMutex:
         if sys.platform != "win32":
             pytest.skip("Windows named mutex is not available here")
 
-        from utils.platform import acquire_instance_mutex
+        from utils.win32 import acquire_instance_mutex
 
         first = acquire_instance_mutex("UnscreenTestMutex_1")
         second = acquire_instance_mutex("UnscreenTestMutex_1")

@@ -2,19 +2,23 @@
 
 ## Architecture
 
-Single unified workflow (`.github/workflows/ci.yml`) with strict job dependency chain:
+Single unified workflow (`.github/workflows/ci.yml`) with a shared-environment
+job chain:
 
 ```
 push (master/dev) or PR
         │
-  ┌─────▼─────┐
-  │   lint    │  ruff check src/ tests/
-  └─────┬─────┘
-        │
-  ┌─────▼─────┐
-  │   test    │  pytest (full suite, fetch-depth: 0)
-  └─────┬─────┘
-        │
+  ┌─────▼───────┐
+  │  prepare    │  checkout + setup-uv + uv sync --frozen
+  │             │  saves .venv to actions/cache (once per lock change)
+  └──────┬──────┘
+         ├────────────────────┐
+  ┌──────▼──────┐      ┌──────▼──────┐
+  │    lint     │      │    test     │   both restore the cached
+  │             │      │             │   .venv and run in parallel
+  │ ruff+pyright │     │   pytest    │
+  └──────┬──────┘      └──────┬──────┘
+         │                     │
   ┌─────▼──────────┐
   │ detect-version │  only on master push
   │    -bump       │  compares pyproject.toml version
@@ -28,6 +32,14 @@ push (master/dev) or PR
   │  publish   │  GitHub Release + asset upload
   └────────────┘
 ```
+
+The environment is set up **once** by `prepare`: the resulting `.venv` is
+saved to `actions/cache` keyed on `uv.lock` + `pyproject.toml` hashes, and
+both `lint` and `test` restore it instead of installing dependencies again.
+On a cache miss (first run, lock change) `prepare` still pays the full
+install once; subsequent runs restore in seconds. Note the workflow needs
+`actions: write` permission for cache saves (both the `.venv` cache and
+`setup-uv`'s own dependency cache).
 
 ## Fail-Safe Guarantees
 
@@ -43,9 +55,10 @@ push (master/dev) or PR
 
 1. Bump `version` in `pyproject.toml` on `master`.
 2. Push triggers `ci.yml`.
-3. `lint` → `test` → `detect-version-bump` detects increase.
-4. `build-windows` and `build-android` run in parallel.
-5. `publish-release` creates GitHub release and attaches binaries.
+3. `prepare` sets up the environment once; `lint` and `test` run in parallel.
+4. `detect-version-bump` detects increase.
+5. `build-windows` and `build-android` run in parallel.
+6. `publish-release` creates GitHub release and attaches binaries.
 
 ## Troubleshooting
 
@@ -54,8 +67,9 @@ push (master/dev) or PR
 - Run `pytest -v --tb=long tests/test_storage.py -k "TestSchemaMigration"` to isolate.
 
 ### Tests fail in CI but pass locally
-- Run `uv run python scripts/ci/local_ci.py` — replicates the CI environment exactly (fresh checkout copy + fresh `uv sync --frozen` venv), so environment-only failures (stale `.pyc` caches masking compile-time warnings) surface locally. The pre-push hook runs this automatically.
-- CI uses shallow clone (`fetch-depth: 0` in lint/test jobs ensures full history).
+- Run `uv run python scripts/ci/local_ci.py` — replicates the CI environment (fresh checkout copy; venv reused while `uv.lock`/`pyproject.toml` are unchanged, mirroring the CI `actions/cache` key), so environment-only failures (stale `.pyc` caches masking compile-time warnings) surface locally. The lefthook-managed pre-push hook runs this automatically (`lefthook.yml`; install once with `uv tool install lefthook && lefthook install`).
+- Manual run: `lefthook run pre-push --force` (plain `lefthook run pre-push` skips commands when no push files are computed). Skip once: `LEFTHOOK=0 git push ...`.
+- CI uses shallow clone (`fetch-depth: 0` in prepare/lint/test jobs ensures full history).
 - CI runs on Windows Server 2022, Python 3.12.x (patch may differ).
 - Check for environment-dependent behavior (file paths, permissions, timezone).
 

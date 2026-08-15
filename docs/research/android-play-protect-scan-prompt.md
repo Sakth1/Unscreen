@@ -1,0 +1,61 @@
+# Android "Scan app" prompt on install/update: why it appears for Unscreen but not PawnPassant
+
+Date: 2026-08-15
+
+## Summary
+
+When installing or updating Unscreen's APK (downloaded from GitHub Releases), Android's Play Protect shows an interactive "Scan app" prompt. This happens even though the APK is correctly signed with the release keystore in CI. The prompt is Google Play Protect's **"App scan recommended"** dialog, shown for apps that are **unknown to Play Protect** — the signing key/APK has never been seen by Google's scan database. It is **not** a signing defect: PawnPassant uses the identical Flet + zipalign + apksigner pipeline with the same secrets-based keystore and does not prompt.
+
+The verified differentiators between the two apps:
+
+| App | Sensitive permissions | In-app APK updater | Prompt on update |
+|---|---|---|---|
+| Unscreen | `PACKAGE_USAGE_STATS`, `REQUEST_INSTALL_PACKAGES` (plus legacy storage) | Yes (ACTION_VIEW install intent) | Yes |
+| PawnPassant | `INTERNET` only | No | No |
+
+Play Protect's install-time checks explicitly scan unknown apps for "malicious code and sensitive permissions" ([source](#evidence)), and the interactive scan dialog is how it screens apps it has never evaluated. Unscreen's usage-access + install-packages permission pair (the classic malware combo) puts it squarely in the interactive-screening class; PawnPassant, holding no sensitive permissions, installs silently. Futo Keyboard avoids the prompt because it is published on Google Play (known to Play Protect); Morphe is sideload-only but has a large install base (100K+), so Play Protect's cloud has already learned its APKs and stable signing key.
+
+## Evidence
+
+- Google's official developer guidance documents the exact dialog: **"Play Protect hasn't seen this app before. To protect your device and data, send some info about the app to Google for scanning before you install."** with buttons *Scan app* / *Don't install app*. Source: [Play Protect warnings: Developer guidance](https://developers.google.com/android/play-protect/warning-dev-guidance) (updated 2026-07-29).
+- Google's stated purpose: "Google Play Protect conducts security checks at install time to help protect users by scanning apps for **malicious code and sensitive permissions** from unknown applications that are being installed on your device." Source: same [warning-dev-guidance](https://developers.google.com/android/play-protect/warning-dev-guidance) page.
+- A second dialog family exists for the same root cause ("This app is unknown to Play Protect… send it to Google for a security check"), and Google's guidance for developers is: "**Ensure that Google Play Protect is aware of your application** to avoid this dialog appearing for users." Source: [warning-dev-guidance](https://developers.google.com/android/play-protect/warning-dev-guidance).
+- The "unknown" state is keyed partly to the developer/signing identity: "Play Protect hasn't seen an app from this developer before. It may be unsafe." Source: [Play Protect warning strings](https://developers.google.com/android/play-protect/warning-strings) (updated 2026-05-19).
+- Apps become known via Play publishing, plus cloud crawling and installs from other markets: "Apps are reported by security researchers, users, and others we find by **crawling the internet and inspecting installed apps from other markets**." Source: [Play Protect cloud-based protections](https://developers.google.com/android/play-protect/cloud-based-protections).
+- Scanning sends app details to Google for a code-level evaluation; per-version: "If you're an app developer, you **may be asked to send each new version of your app to Google**." Source: [Use Google Play Protect](https://support.google.com/android/answer/2812853).
+- The auto-**block** (non-interactive) list is only `RECEIVE_SMS`, `READ_SMS`, `BIND_NOTIFICATION_LISTENER_SERVICE`, `BIND_ACCESSIBILITY_SERVICE` — `PACKAGE_USAGE_STATS` and `REQUEST_INSTALL_PACKAGES` are not in it, so Unscreen gets the interactive scan offer, not a hard block. Sources: [warning-dev-guidance](https://developers.google.com/android/play-protect/warning-dev-guidance); [Google Security Blog, Feb 6 2024](https://security.googleblog.com/2024/02/piloting-new-ways-to-protect-Android-users-from%20financial-fraud.html).
+- Real-time install scanning shipped Oct 2023 and now covers 185 markets / 2.8B devices; Play Protect scans 350B+ apps daily and blocks unknown-source installs aggressively. Sources: [Google Security Blog, Oct 18 2023](https://security.googleblog.com/2023/10/enhanced-google-play-protect-real-time.html); [blog.google, Feb 19 2026](https://blog.google/security/keeping-google-play-android-app-ecosystem-safe-2025/).
+- `REQUEST_INSTALL_PACKAGES` is a Play-policy-restricted permission (declaration form in Play Console), required on API 26+ for `ACTION_INSTALL_PACKAGE` / the `PackageInstaller` API — i.e. exactly what Unscreen's in-app updater legitimately needs. The policy governs Play distribution, not the sideload scan dialog. Source: [Play Console Help](https://support.google.com/googleplay/android-developer/answer/12085295).
+- Comparison apps: Futo Keyboard is on Google Play (`org.futo.inputmethod.latin.playstore`): [Play Store listing](https://play.google.com/store/apps/details?id=org.futo.inputmethod.latin.playstore). Morphe Manager (`app.morphe.manager`) is sideload-only but carries 100K+ installs and a stable certificate across releases: [APKMirror](https://www.apkmirror.com/apk/morpheapp/morphe-manager/).
+- PawnPassant's manifest declares only `INTERNET` and its CI signs identically to Unscreen's (same `flet build apk` → zipalign → apksigner with secrets keystore). Sources: [PawnPassant pyproject.toml](https://raw.githubusercontent.com/Sakth1/PawnPassant/master/pyproject.toml), [PawnPassant release-build.yml](https://raw.githubusercontent.com/Sakth1/PawnPassant/master/.github/workflows/release-build.yml).
+
+### Flet build pipeline facts (v0.86.x, from source)
+
+- `flet build apk` runs `flutter build apk` (release mode, no mode flag → Flutter default `--release`). Source: [flet-cli build.py @ v0.86.0](https://raw.githubusercontent.com/flet-dev/flet/v0.86.0/sdk/python/packages/flet-cli/src/flet_cli/commands/build.py).
+- The template signs release builds with the **debug keystore** unless signing is configured ("If you don't provide an upload keystore, release builds are signed with the debug key"). Unscreen's CI correctly replaces that signature with `apksigner` using the secrets keystore, and `apksigner verify` passes — so the shipped APK is release-key-signed. Sources: [flet template build.gradle.kts @ v0.86.0](https://raw.githubusercontent.com/flet-dev/flet/v0.86.0/sdk/python/templates/build/%7B%7Bcookiecutter.out_dir%7D%7D/android/app/build.gradle.kts); [Flet docs: signing an Android bundle](https://flet.dev/docs/publish/android/).
+- `applicationId` = `{org}.{project_name}` → `com.mycompany.unscreen` (`[tool.flet] product` only sets the launcher label). Source: [flet cookiecutter.json @ v0.86.0](https://raw.githubusercontent.com/flet-dev/flet/v0.86.0/sdk/python/templates/build/cookiecutter.json).
+- **versionCode is frozen at 1**: the template falls back to `1` when no `--build-number` / `[tool.flet].build_number` is set; Unscreen's CI passes neither, so every release ships versionCode 1 (versionName still bumps). Source: [flet-cli build.py @ v0.86.0](https://raw.githubusercontent.com/flet-dev/flet/v0.86.0/sdk/python/packages/flet-cli/src/flet_cli/commands/build.py); [flet issue #4852](https://github.com/flet-dev/flet/issues/4852).
+- Template defaults: minSdk 24 / targetSdk 36 / compileSdk 36 (Flutter 3.44) — no "built for an older Android" warning applies. Source: [FlutterExtension.kt @ 3.44.4](https://raw.githubusercontent.com/flutter/flutter/3.44.4/packages/flutter_tools/gradle/src/main/kotlin/FlutterExtension.kt).
+- The template manifest ships only `INTERNET`; `PACKAGE_USAGE_STATS` / `REQUEST_INSTALL_PACKAGES` / storage permissions in Unscreen are deliberate `[tool.flet.android.permission]` config, rendered via the manifest template. Sources: [flet template AndroidManifest.xml @ v0.86.0](https://raw.githubusercontent.com/flet-dev/flet/v0.86.0/sdk/python/templates/build/%7B%7Bcookiecutter.out_dir%7D%7D/android/app/src/main/AndroidManifest.xml); [Flet docs: publishing Android](https://flet.dev/docs/publish/android/).
+- Since 0.86.0, Python packages are compiled to `.pyc` by default — `--compile-packages` is redundant. Source: [flet CHANGELOG @ v0.86.0](https://raw.githubusercontent.com/flet-dev/flet/v0.86.0/CHANGELOG.md).
+- No Flet changelog entries or issues exist about Play Protect / the scan prompt / `REQUEST_INSTALL_PACKAGES` (0 search results in flet-dev/flet, checked 2026-08-15). The scan prompt is platform behavior, not a Flet bug.
+
+## Root Cause
+
+Unscreen's APK is **unknown to Google Play Protect** (GitHub-Release-only distribution, few installs) and it declares **sensitive permissions** (`PACKAGE_USAGE_STATS`, `REQUEST_INSTALL_PACKAGES`) that Play Protect's install-time screening explicitly targets, so the installer surfaces the interactive "Scan app" dialog before install. Every new release is a new artifact ("you may be asked to send each new version of your app to Google"), so updates re-prompt until Play Protect learns the app. Signing, versionCode, and applicationId are not involved.
+
+## Solution Options
+
+1. **Make Play Protect aware of the app (Google's documented fix, rejected for now).** Publish to Google Play on a private internal/closed testing track (free, unreleased); Play's review pipeline scans the app and keys knowledge to the signing identity, silencing installs and updates. Prerequisite: a real versionCode strategy (`[tool.flet].build_number` or `--build-number`), since versionCode 1 cannot be reused for later uploads ("Version code 1 has already been used"). Source: [flet issue #4852](https://github.com/flet-dev/flet/issues/4852).
+2. **Minimize the permission surface (applied).** Google's guidance: "Your app should only request permissions that the app needs." Remove the legacy `WRITE_EXTERNAL_STORAGE` / `READ_EXTERNAL_STORAGE` permissions (no-ops under scoped storage on API 29+, already maxSdk-capped). Keep `PACKAGE_USAGE_STATS` (core function: usage tracking) and `REQUEST_INSTALL_PACKAGES` (the in-app updater requires it on API 26+). This moves Unscreen's profile toward PawnPassant's, the empirically prompt-free case in the same pipeline.
+3. **Accept the prompt (documented behavior).** The dialog is Google's standard screening for unknown apps; per-device it appears once and stops after the user sends the app for a scan (one-time, or always via "Improve harmful app detection" in Play Protect settings). It is not a red flag about the app.
+4. **Keep one stable signing key forever.** If the keystore rotates, updates fail outright with `INSTALL_FAILED_UPDATE_INCOMPATIBLE` (signature mismatch), and any Play Protect knowledge keyed to the old identity is lost. Log the certificate fingerprint per release to make accidental rotation visible.
+
+## Recommended Next Step
+
+Ship the permission cleanup and the versionCode fix (`--build-number` from `github.run_number`) so the app's profile matches the quiet PawnPassant case as closely as possible and future Play uploads remain possible. Re-evaluate the private internal-testing track if the prompt persists after several releases; it remains the only guaranteed elimination.
+
+## Open Questions / Limitations
+
+- The exact GMS decision logic (why one unknown APK gets an interactive scan vs. silent install) is closed-source; the permission-surface explanation is the best-supported inference, not a documented guarantee.
+- Whether Play Protect keys knowledge to the signing identity alone or to each APK artifact is not fully documented; the "from this developer" warning string implies identity-keyed knowledge, but per-version re-scanning is explicitly documented.

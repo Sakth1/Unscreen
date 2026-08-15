@@ -415,8 +415,8 @@ class TestDataDiagnosticsSection:
                 "device_id": "dev",
                 "platform": "windows",
                 "event_type": "foreground_transition",
-                "timestamp": 1000.0,
-                "collected_at": 1000.0,
+                "timestamp": 1000000,
+                "collected_at": 1000000,
                 "payload": {"app": "Code.exe"},
                 "source": "foreground",
             }

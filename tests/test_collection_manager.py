@@ -4,8 +4,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from core.config_manager import ConfigManager
+from core.event_bus import TickBus
 from core.scheduler import Scheduler
-from utils.bus import TickBus
 
 
 @pytest.fixture(autouse=True)

@@ -2,7 +2,7 @@ import asyncio
 import logging
 
 from core.collectors.base import Watcher
-from utils.bus import TickBus
+from core.event_bus import TickBus
 
 logger = logging.getLogger(__name__)
 

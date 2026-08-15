@@ -1,3 +1,4 @@
+import hashlib
 import json
 import logging
 import os
@@ -10,10 +11,16 @@ from pathlib import Path
 from core.device_identity import get_device_id
 from utils.paths import get_data_dir
 from utils.platform import is_android
+from utils.time_utils import utc_timestamp
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+
+# Pre-v7 databases are structurally incompatible with the de-bloated schema
+# (device_id columns, REAL timestamps, no dedup identity). The app is early
+# stage, so rather than migrating we wipe and recreate fresh.
+WIPE_BELOW_VERSION = SCHEMA_VERSION
 
 
 def _db_path() -> str:
@@ -22,6 +29,13 @@ def _db_path() -> str:
 
 def _schema_dir() -> str:
     return os.path.join(os.path.dirname(__file__), "schemas")
+
+
+def _payload_hash(payload: dict) -> bytes:
+    canonical = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    )
+    return hashlib.blake2b(canonical.encode("utf-8"), digest_size=16).digest()
 
 
 class Storage:
@@ -45,6 +59,9 @@ class Storage:
 
         self._path = path
         self._durable_backup = None
+        self._device_fk: int | None = None
+        self._event_type_ids: dict[str, int] = {}
+        self._source_ids: dict[str, int] = {}
         if (
             self._platform == "android"
             and path != ":memory:"
@@ -55,6 +72,7 @@ class Storage:
             self._conn = self._connect()
             self._run_migrations()
             self._register_device()
+            self._device_fk = self._resolve_device_fk(self._device_id)
             self._run_startup_health_checks()
             self._log_storage_info()
         except sqlite3.DatabaseError as exc:
@@ -148,38 +166,62 @@ class Storage:
         self._conn = self._connect()
         self._run_migrations()
         self._register_device()
+        self._device_fk = self._resolve_device_fk(self._device_id)
         self._run_startup_health_checks()
 
     def _run_migrations(self) -> None:
-        cursor = self._conn.execute("PRAGMA user_version")
-        current_version = cursor.fetchall()[0][0] or 0
+        current_version = self._conn.execute("PRAGMA user_version").fetchone()[0] or 0
 
-        if current_version < SCHEMA_VERSION:
-            logger.info("Migrating schema v%d -> v%d", current_version, SCHEMA_VERSION)
+        if current_version == SCHEMA_VERSION:
+            return
 
-            core_sql = Path(_schema_dir(), "core.sql").read_text()
-            for stmt in core_sql.split(";"):
-                stmt = stmt.strip()
-                if stmt:
-                    self._conn.execute(stmt)
+        if current_version == 0:
+            logger.info("Fresh database — creating schema v%d", SCHEMA_VERSION)
+            self._create_schema()
+        else:
+            logger.warning(
+                "Database schema v%d predates v%d — wiping all data and "
+                "recreating (early-stage policy: no data migration)",
+                current_version,
+                WIPE_BELOW_VERSION,
+            )
+            self._wipe_and_recreate()
 
-            platform_sql = Path(_schema_dir(), f"{self._platform}.sql").read_text()
-            platform_sql = platform_sql.replace("{short_id}", self._short_id)
-            for stmt in platform_sql.split(";"):
-                stmt = stmt.strip()
-                if stmt:
-                    self._conn.execute(stmt)
+    def _create_schema(self) -> None:
+        core_sql = Path(_schema_dir(), "core.sql").read_text()
+        for stmt in core_sql.split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                self._conn.execute(stmt)
 
-            self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-            logger.info("Schema migration complete")
+        platform_sql = Path(_schema_dir(), f"{self._platform}.sql").read_text()
+        platform_sql = platform_sql.replace("{short_id}", self._short_id)
+        for stmt in platform_sql.split(";"):
+            stmt = stmt.strip()
+            if stmt:
+                self._conn.execute(stmt)
 
-            cols = {
-                r[1]
-                for r in self._conn.execute("PRAGMA table_info(raw_events)").fetchall()
-            }
-            if "tick_uuid" in cols:
-                self._conn.execute("ALTER TABLE raw_events DROP COLUMN tick_uuid")
-                logger.info("Dropped orphaned tick_uuid column from raw_events")
+        self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        logger.info("Schema created: v%d", SCHEMA_VERSION)
+
+    def _wipe_and_recreate(self) -> None:
+        self._conn.close()
+        for suffix in ("", "-wal", "-shm"):
+            path = f"{self._path}{suffix}"
+            if os.path.exists(path):
+                os.remove(path)
+        if self._platform == "android":
+            try:
+                from core.storage.android_durable import AndroidDurableBackup
+
+                if AndroidDurableBackup(self._path).delete():
+                    logger.info("Deleted durable Android backup during schema wipe")
+            except Exception:
+                logger.exception(
+                    "Failed to delete durable Android backup during schema wipe"
+                )
+        self._conn = self._connect()
+        self._create_schema()
 
     def _register_device(self) -> None:
         now = datetime.now(timezone.utc).isoformat()
@@ -193,6 +235,36 @@ class Storage:
             "UPDATE devices SET last_seen = ? WHERE device_id = ?",
             (now, self._device_id),
         )
+
+    def _resolve_device_fk(self, device_id: str) -> int | None:
+        row = self._conn.execute(
+            "SELECT id FROM devices WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        if row is not None:
+            return row[0]
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT OR IGNORE INTO devices
+               (device_id, hostname, platform, first_seen, is_current)
+               VALUES (?, NULL, ?, ?, 0)""",
+            (device_id, self._platform, now),
+        )
+        row = self._conn.execute(
+            "SELECT id FROM devices WHERE device_id = ?", (device_id,)
+        ).fetchone()
+        return row[0] if row is not None else None
+
+    def _resolve_name_fk(self, table: str, name: str, cache: dict[str, int]) -> int:
+        fk = cache.get(name)
+        if fk is not None:
+            return fk
+        self._conn.execute(f"INSERT OR IGNORE INTO {table} (name) VALUES (?)", (name,))
+        row = self._conn.execute(
+            f"SELECT id FROM {table} WHERE name = ?", (name,)
+        ).fetchone()
+        fk = row[0]
+        cache[name] = fk
+        return fk
 
     def _run_startup_health_checks(self) -> None:
         result = self.check_integrity()
@@ -251,29 +323,35 @@ class Storage:
     def write_event(
         self,
         event_type: str,
-        timestamp: float,
+        timestamp: int,
         payload: dict,
         source: str,
     ) -> int:
         logger.debug(
-            "Writing event: type=%s timestamp=%.3f source=%s payload=%s",
+            "Writing event: type=%s timestamp=%d source=%s payload=%s",
             event_type,
             timestamp,
             source,
             json.dumps(payload)[:200],
         )
+        event_type_fk = self._resolve_name_fk(
+            "event_types", event_type, self._event_type_ids
+        )
+        source_fk = self._resolve_name_fk("sources", source, self._source_ids)
+        payload_json = json.dumps(payload, sort_keys=True, ensure_ascii=True)
         self._conn.execute(
             """INSERT INTO raw_events
-               (device_id, platform, event_type, timestamp, collected_at, payload, source)
+               (device_fk, event_type_fk, source_fk, timestamp, collected_at,
+                payload, payload_hash)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
-                self._device_id,
-                self._platform,
-                event_type,
+                self._device_fk,
+                event_type_fk,
+                source_fk,
                 timestamp,
-                datetime.now(timezone.utc).timestamp(),
-                json.dumps(payload),
-                source,
+                utc_timestamp(),
+                payload_json,
+                _payload_hash(payload),
             ),
         )
         return self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -282,8 +360,8 @@ class Storage:
         self,
         event_type: str | None = None,
         source: str | None = None,
-        since: float | None = None,
-        until: float | None = None,
+        since: int | None = None,
+        until: int | None = None,
         limit: int | None = None,
         desc: bool = False,
     ) -> list[dict]:
@@ -291,22 +369,29 @@ class Storage:
         params: list = []
 
         if event_type:
-            filters.append("event_type = ?")
+            filters.append("et.name = ?")
             params.append(event_type)
         if source:
-            filters.append("source = ?")
+            filters.append("s.name = ?")
             params.append(source)
         if since is not None:
-            filters.append("timestamp >= ?")
+            filters.append("e.timestamp >= ?")
             params.append(since)
         if until is not None:
-            filters.append("timestamp <= ?")
+            filters.append("e.timestamp <= ?")
             params.append(until)
 
-        sql = "SELECT id, device_id, platform, event_type, timestamp, collected_at, payload, source FROM raw_events"
+        sql = (
+            "SELECT e.id, d.device_id, d.platform, et.name, e.timestamp,"
+            " e.collected_at, e.payload, s.name"
+            " FROM raw_events e"
+            " JOIN devices d ON d.id = e.device_fk"
+            " JOIN event_types et ON et.id = e.event_type_fk"
+            " JOIN sources s ON s.id = e.source_fk"
+        )
         if filters:
             sql += " WHERE " + " AND ".join(filters)
-        sql += " ORDER BY timestamp DESC" if desc else " ORDER BY timestamp ASC"
+        sql += " ORDER BY e.timestamp DESC" if desc else " ORDER BY e.timestamp ASC"
         if limit is not None:
             sql += f" LIMIT {limit}"
 
@@ -325,13 +410,13 @@ class Storage:
         ]
 
     def write_canonical_session(self, session: dict) -> int:
+        device_fk = self._resolve_device_fk(session["device_id"])
         self._conn.execute(
             """INSERT INTO sessions
-               (device_id, platform, start_ts, end_ts, duration_s, app_key, payload, session_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (device_fk, start_ts, end_ts, duration_s, app_key, payload, session_type)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
-                session["device_id"],
-                session["platform"],
+                device_fk,
                 session["start_ts"],
                 session.get("end_ts"),
                 session.get("duration_s"),
@@ -346,8 +431,8 @@ class Storage:
         self,
         app_key: str | None = None,
         device_id: str | None = None,
-        since: float | None = None,
-        until: float | None = None,
+        since: int | None = None,
+        until: int | None = None,
         platform: str | None = None,
         limit: int | None = None,
     ) -> list[dict]:
@@ -355,28 +440,30 @@ class Storage:
         params: list = []
 
         if app_key:
-            filters.append("app_key = ?")
+            filters.append("s.app_key = ?")
             params.append(app_key)
         if device_id:
-            filters.append("device_id = ?")
+            filters.append("d.device_id = ?")
             params.append(device_id)
         if since is not None:
-            filters.append("start_ts >= ?")
+            filters.append("s.start_ts >= ?")
             params.append(since)
         if until is not None:
-            filters.append("COALESCE(end_ts, start_ts) <= ?")
+            filters.append("COALESCE(s.end_ts, s.start_ts) <= ?")
             params.append(until)
         if platform:
-            filters.append("platform = ?")
+            filters.append("d.platform = ?")
             params.append(platform)
 
         sql = (
-            "SELECT id, device_id, platform, start_ts, end_ts,"
-            "duration_s,app_key, payload, session_type FROM sessions"
+            "SELECT s.id, d.device_id, d.platform, s.start_ts, s.end_ts,"
+            " s.duration_s, s.app_key, s.payload, s.session_type"
+            " FROM sessions s"
+            " JOIN devices d ON d.id = s.device_fk"
         )
         if filters:
             sql += " WHERE " + " AND ".join(filters)
-        sql += " ORDER BY start_ts ASC"
+        sql += " ORDER BY s.start_ts ASC"
         if limit is not None:
             sql += f" LIMIT {limit}"
 
@@ -398,7 +485,9 @@ class Storage:
     def write_url_visit(
         self,
         url: str,
-        seen_at: float,
+        seen_at: int,
+        event_id: int,
+        browser: str | None = None,
         extraction_method: str | None = None,
         confidence: str = "high",
         scheme: str | None = None,
@@ -407,16 +496,24 @@ class Storage:
         path: str | None = None,
         is_trackable: bool = True,
     ) -> int:
+        """Record a URL visit. Returns the new rowid, or 0 when the visit
+        duplicates an existing (device_fk, event_id, url) row — e.g. the same
+        URL revisited within one browser session — in which case it is
+        silently skipped."""
+        before = self._conn.total_changes
         self._conn.execute(
-            """INSERT INTO url_visits
-               (device_id, url, seen_at, collected_at, extraction_method, confidence,
-                scheme, host, domain, path, is_trackable)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT OR IGNORE INTO url_visits
+               (device_fk, event_id, url, browser, seen_at, collected_at,
+                extraction_method, confidence, scheme, host, domain, path,
+                is_trackable)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                self._device_id,
+                self._device_fk,
+                event_id,
                 url,
+                browser,
                 seen_at,
-                datetime.now(timezone.utc).timestamp(),
+                utc_timestamp(),
                 extraction_method,
                 confidence,
                 scheme,
@@ -426,35 +523,41 @@ class Storage:
                 int(is_trackable),
             ),
         )
+        if self._conn.total_changes == before:
+            logger.debug("Skipped duplicate url_visit: event=%d url=%s", event_id, url)
+            return 0
         return self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def get_url_visits(
         self,
         device_id: str | None = None,
-        since: float | None = None,
-        until: float | None = None,
+        since: int | None = None,
+        until: int | None = None,
         limit: int | None = None,
     ) -> list[dict]:
         filters: list[str] = []
         params: list = []
 
         if device_id:
-            filters.append("device_id = ?")
+            filters.append("d.device_id = ?")
             params.append(device_id)
         if since is not None:
-            filters.append("seen_at >= ?")
+            filters.append("u.seen_at >= ?")
             params.append(since)
         if until is not None:
-            filters.append("seen_at <= ?")
+            filters.append("u.seen_at <= ?")
             params.append(until)
 
         sql = (
-            "SELECT id, device_id, event_id, session_id, url, scheme, host, domain, path, "
-            "extraction_method, confidence, is_trackable, seen_at, collected_at FROM url_visits"
+            "SELECT u.id, d.device_id, u.event_id, u.session_id, u.url, u.browser,"
+            " u.scheme, u.host, u.domain, u.path, u.extraction_method,"
+            " u.confidence, u.is_trackable, u.seen_at, u.collected_at"
+            " FROM url_visits u"
+            " JOIN devices d ON d.id = u.device_fk"
         )
         if filters:
             sql += " WHERE " + " AND ".join(filters)
-        sql += " ORDER BY seen_at ASC"
+        sql += " ORDER BY u.seen_at ASC"
         if limit is not None:
             sql += f" LIMIT {limit}"
 
@@ -465,24 +568,19 @@ class Storage:
                 "event_id": r[2],
                 "session_id": r[3],
                 "url": r[4],
-                "scheme": r[5],
-                "host": r[6],
-                "domain": r[7],
-                "path": r[8],
-                "extraction_method": r[9],
-                "confidence": r[10],
-                "is_trackable": bool(r[11]),
-                "seen_at": r[12],
-                "collected_at": r[13],
+                "browser": r[5],
+                "scheme": r[6],
+                "host": r[7],
+                "domain": r[8],
+                "path": r[9],
+                "extraction_method": r[10],
+                "confidence": r[11],
+                "is_trackable": bool(r[12]),
+                "seen_at": r[13],
+                "collected_at": r[14],
             }
             for r in self._conn.execute(sql, params).fetchall()
         ]
-
-    def backfill_url_event_id(self, url_visit_id: int, event_id: int) -> None:
-        self._conn.execute(
-            "UPDATE url_visits SET event_id = ? WHERE id = ?",
-            (event_id, url_visit_id),
-        )
 
     def backfill_url_session_id(self, url_visit_id: int, session_id: int) -> None:
         self._conn.execute(
@@ -495,6 +593,7 @@ class Storage:
             datetime.now(timezone.utc)
             .replace(hour=0, minute=0, second=0, microsecond=0)
             .timestamp()
+            * 1000
         )
         row = self._conn.execute(
             "SELECT COALESCE(SUM(duration_s), 0) FROM sessions WHERE start_ts >= ? AND duration_s IS NOT NULL",
@@ -505,32 +604,40 @@ class Storage:
     def count_events(
         self,
         event_type: str | None = None,
-        since: float | None = None,
-        until: float | None = None,
+        since: int | None = None,
+        until: int | None = None,
     ) -> int:
         """Count raw events matching the filters (cheap COUNT(*))."""
         filters: list[str] = []
         params: list = []
 
         if event_type:
-            filters.append("event_type = ?")
+            filters.append("et.name = ?")
             params.append(event_type)
         if since is not None:
-            filters.append("timestamp >= ?")
+            filters.append("e.timestamp >= ?")
             params.append(since)
         if until is not None:
-            filters.append("timestamp <= ?")
+            filters.append("e.timestamp <= ?")
             params.append(until)
 
-        sql = "SELECT COUNT(*) FROM raw_events"
+        sql = (
+            "SELECT COUNT(*) FROM raw_events e"
+            " JOIN event_types et ON et.id = e.event_type_fk"
+        )
         if filters:
             sql += " WHERE " + " AND ".join(filters)
         return int(self._conn.execute(sql, params).fetchone()[0])
 
     def get_latest_battery(self) -> dict | None:
         row = self._conn.execute(
-            "SELECT payload FROM raw_events WHERE event_type = ? ORDER BY timestamp DESC LIMIT 1",
-            ("power_change",),
+            "SELECT payload FROM raw_events WHERE event_type_fk = ?"
+            " ORDER BY timestamp DESC LIMIT 1",
+            (
+                self._resolve_name_fk(
+                    "event_types", "power_change", self._event_type_ids
+                ),
+            ),
         ).fetchone()
         if row is None:
             return None
@@ -541,6 +648,7 @@ class Storage:
             datetime.now(timezone.utc)
             .replace(hour=0, minute=0, second=0, microsecond=0)
             .timestamp()
+            * 1000
         )
         rows = self._conn.execute(
             """SELECT app_key, SUM(duration_s) as total_s
@@ -557,6 +665,7 @@ class Storage:
         self._conn.execute("DELETE FROM url_visits")
         self._conn.execute("DELETE FROM raw_events")
         self._conn.execute("DELETE FROM sessions")
+        self._conn.execute("DELETE FROM sync_cursors")
         for suffix in ("events_", "observations_", "sessions_"):
             legacy = f"{suffix}{self._short_id}"
             self._conn.execute(f"DROP TABLE IF EXISTS {legacy}")

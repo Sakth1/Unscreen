@@ -1,0 +1,5 @@
+pre-push:
+  parallel: false
+  commands:
+    ci-replication:
+      run: uv run python scripts/ci/local_ci.py

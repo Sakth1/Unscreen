@@ -1,6 +1,6 @@
 # ADR-0002: Event-Sourced Collection Architecture
 
-**Status:** Accepted (v0.4.1)
+**Status:** Accepted (v0.4.1); storage layout updated by schema v7 (v0.4.10-dev) — see "Schema v7 update" below.
 
 ## Context
 
@@ -109,3 +109,33 @@ The migration happens in phases, maintaining backward compatibility at each step
 - Neutral: Dual-write temporarily doubles storage writes during migration
 - Negative: Windows precision cannot be matched on Android (fundamental API limitation — documented, not hidden)
 - Migration effort: phased approach allows each step to be verified independently
+
+## Schema v7 update (v0.4.10-dev) — de-bloated storage layout
+
+The event-sourced principles are unchanged; the **storage layout** of the
+canonical store was redesigned to stay small as the timeline grows:
+
+- **Device identity lives once.** `devices` gains a stable integer `id`;
+  event rows reference it via `device_fk` instead of repeating the 36-char
+  UUID on every row. `platform` is no longer repeated either (derivable
+  via the `devices` join). RawEvent's `device_id`/`platform` are still
+  returned by the Storage API — the API shape is preserved.
+- **Timestamps are integer milliseconds** (UTC epoch) everywhere —
+  exact comparisons, deterministic dedup keys, no float artifacts.
+- **`event_type` / `source` are dictionary-encoded** into small integer
+  FKs (`event_types`, `sources` tables).
+- **`payload_hash` (16-byte blake2b of canonical payload JSON) makes
+  re-imports idempotent**: `UNIQUE(device_fk, event_type_fk, timestamp,
+  payload_hash)` rejects exact duplicates (sync-safe) while admitting
+  Android's same-millisecond `app_usage_interval` fan-out (distinct
+  payloads → distinct hashes).
+- **`sync_cursors`** records per-remote-device high-water marks for the
+  planned sync engine.
+- **`url_visits.event_id` is populated at write time** by the event
+  bridge (fresh event on app change, cached `_last_event_id[watcher]` on
+  tab change) — the bridge owns URL-visit persistence, the collector only
+  attaches a `url_visit` dict to its tick. `foreground_transition`
+  payloads stay lean (no browser/url/page_title/inferred_domain).
+- **Pre-v7 databases are wiped and recreated fresh — no data migration**
+  (early-stage policy; the Android durable backup is deleted during the
+  wipe). This replaces the phased migration plan above, which is obsolete.

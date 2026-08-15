@@ -2,7 +2,7 @@ import logging
 
 import psutil
 
-from utils.models import Tick, WatcherConfig
+from core.models import Tick, WatcherConfig
 
 logger = logging.getLogger(__name__)
 
