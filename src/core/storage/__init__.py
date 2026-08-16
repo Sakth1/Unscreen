@@ -442,11 +442,11 @@ class Storage:
         )
         return self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def close_app_session(self, event_id: int, end_ts: int) -> bool:
+    def close_app_session(self, event_id: int, end_ts: int) -> int | None:
         """Close the open app session owned by ``event_id`` at ``end_ts``.
 
         Sets ``end_ts`` and ``duration_s = (end_ts - start_ts) / 1000``.
-        Returns ``True`` when a row was updated, ``False`` when the session
+        Returns the closed session's rowid, or ``None`` when the session
         was already closed or does not exist.
         """
         cur = self._conn.execute(
@@ -455,7 +455,13 @@ class Storage:
                WHERE device_fk = ? AND event_id = ? AND end_ts IS NULL""",
             (end_ts, end_ts, self._device_fk, event_id),
         )
-        return cur.rowcount > 0
+        if cur.rowcount == 0:
+            return None
+        row = self._conn.execute(
+            "SELECT id FROM app_sessions WHERE device_fk = ? AND event_id = ?",
+            (self._device_fk, event_id),
+        ).fetchone()
+        return row[0] if row is not None else None
 
     def get_app_sessions(
         self,
@@ -532,12 +538,12 @@ class Storage:
         )
         return self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def close_status_session(self, event_id: int, end_ts: int) -> bool:
+    def close_status_session(self, event_id: int, end_ts: int) -> int | None:
         """Close the open status block owned by ``event_id`` at ``end_ts``.
 
         Sets ``end_ts`` and ``duration_s = (end_ts - start_ts) / 1000``.
-        Returns ``True`` when a row was updated, ``False`` when the block
-        was already closed or does not exist.
+        Returns the closed block's rowid, or ``None`` when the block was
+        already closed or does not exist.
         """
         cur = self._conn.execute(
             """UPDATE status_sessions
@@ -545,7 +551,13 @@ class Storage:
                WHERE device_fk = ? AND event_id = ? AND end_ts IS NULL""",
             (end_ts, end_ts, self._device_fk, event_id),
         )
-        return cur.rowcount > 0
+        if cur.rowcount == 0:
+            return None
+        row = self._conn.execute(
+            "SELECT id FROM status_sessions WHERE device_fk = ? AND event_id = ?",
+            (self._device_fk, event_id),
+        ).fetchone()
+        return row[0] if row is not None else None
 
     def get_status_sessions(
         self,
@@ -702,10 +714,12 @@ class Storage:
             for r in self._conn.execute(sql, params).fetchall()
         ]
 
-    def backfill_url_session_id(self, url_visit_id: int, session_id: int) -> None:
+    def backfill_url_sessions_for_event(self, event_id: int, session_id: int) -> None:
+        """Stamp ``url_visits.session_id`` for every visit owned by
+        ``event_id`` that does not have one yet."""
         self._conn.execute(
-            "UPDATE url_visits SET session_id = ? WHERE id = ?",
-            (session_id, url_visit_id),
+            "UPDATE url_visits SET session_id = ? WHERE event_id = ? AND session_id IS NULL",
+            (session_id, event_id),
         )
 
     def get_today_seconds(self) -> float:

@@ -163,6 +163,107 @@ class TestEventBridge:
         assert visits[0]["url"] == "https://a.com"
         assert visits[0]["browser"] == "brave"
 
+    def test_app_sessions_produced_on_windows_transitions(self, in_memory_db):
+        from datetime import datetime, timedelta, timezone
+
+        bridge = _EventBridge(in_memory_db, "windows")
+        t0 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+        bridge(Tick(watcher="foreground", data={"app": "Code.exe"}, timestamp=t0))
+        t1 = t0 + timedelta(seconds=90)
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={"app": "brave.exe", "title": "x"},
+                timestamp=t1,
+            )
+        )
+        sessions = in_memory_db.get_app_sessions()
+        assert len(sessions) == 2
+        first, second = sessions
+        assert first["app_key"] == "Code.exe"
+        assert first["end_ts"] == int(t1.timestamp() * 1000)
+        assert first["duration_s"] == 90.0
+        assert second["app_key"] == "brave.exe"
+        assert second["end_ts"] is None  # still open
+        events = in_memory_db.get_raw_events()
+        assert first["event_id"] == events[0]["id"]
+        assert second["event_id"] == events[1]["id"]
+
+    def test_app_sessions_deduped_ticks_do_not_produce_sessions(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "windows")
+        bridge(Tick(watcher="foreground", data={"app": "Code.exe"}))
+        bridge(Tick(watcher="foreground", data={"app": "Code.exe"}))
+        assert len(in_memory_db.get_app_sessions()) == 1
+
+    def test_android_produces_no_app_sessions(self, in_memory_db):
+        from datetime import datetime, timezone
+
+        bridge = _EventBridge(in_memory_db, "android")
+        t0 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+        bridge(
+            Tick(
+                watcher="android_foreground",
+                data={"package": "com.android.chrome"},
+                timestamp=t0,
+            )
+        )
+        assert len(in_memory_db.get_raw_events()) == 1
+        assert len(in_memory_db.get_app_sessions()) == 0
+
+    def test_finalize_closes_open_app_session(self, in_memory_db):
+        from datetime import datetime, timedelta, timezone
+
+        bridge = _EventBridge(in_memory_db, "windows")
+        t0 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+        bridge(Tick(watcher="foreground", data={"app": "Code.exe"}, timestamp=t0))
+        stop = t0 + timedelta(minutes=5)
+        bridge.finalize_open_sessions(int(stop.timestamp() * 1000))
+        sessions = in_memory_db.get_app_sessions()
+        assert len(sessions) == 1
+        assert sessions[0]["end_ts"] == int(stop.timestamp() * 1000)
+        assert sessions[0]["duration_s"] == 300.0
+
+    def test_finalize_is_noop_when_nothing_open(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "windows")
+        bridge.finalize_open_sessions(1234)
+        assert len(in_memory_db.get_app_sessions()) == 0
+
+    def test_finalize_skipped_on_android(self, in_memory_db):
+        bridge = _EventBridge(in_memory_db, "android")
+        bridge(Tick(watcher="android_foreground", data={"package": "a.b.c"}))
+        bridge.finalize_open_sessions(1234)
+        assert len(in_memory_db.get_app_sessions()) == 0
+
+    def test_url_visits_backfilled_on_session_close(self, in_memory_db):
+        from datetime import datetime, timedelta, timezone
+
+        bridge = _EventBridge(in_memory_db, "windows")
+        t0 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={
+                    "app": "brave.exe",
+                    "url_visit": self._url_visit("https://a.com"),
+                },
+                timestamp=t0,
+            )
+        )
+        assert all(
+            v["session_id"] is None for v in in_memory_db.get_url_visits()
+        )
+        bridge(
+            Tick(
+                watcher="foreground",
+                data={"app": "Code.exe"},
+                timestamp=t0 + timedelta(seconds=10),
+            )
+        )
+        visits = in_memory_db.get_url_visits()
+        assert len(visits) == 1
+        sessions = in_memory_db.get_app_sessions()
+        assert visits[0]["session_id"] == sessions[0]["id"]
+
     def test_url_visit_reuses_cached_event_id_on_tab_change(self, in_memory_db):
         bridge = _EventBridge(in_memory_db, "windows")
         bridge(

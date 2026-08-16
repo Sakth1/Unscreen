@@ -291,11 +291,12 @@ s.get_today_seconds()                     # SUM(duration_s) of app_sessions toda
 s.get_today_top_apps(5)                   # app_sessions GROUP BY app_key today
 s.count_events(since=..., until=..., event_type=...)  # cheap COUNT(*) (0.4.9)
 s.open_app_session(event_id, start_ts, app_key, payload)  # insert open session (bridge)
-s.close_app_session(event_id, end_ts)     # close it: end_ts + duration_s (0.4.10)
+s.close_app_session(event_id, end_ts)  # close: returns rowid or None (0.4.10)
+s.backfill_url_sessions_for_event(event_id, session_id)  # stamp visits of a closed session
 s.get_app_sessions(app_key=..., device_id=..., since=..., until=...,
                    platform=..., limit=...)             # app sessions as dicts
 s.open_status_session(event_id, start_ts, status, payload)  # insert open status block
-s.close_status_session(event_id, end_ts)  # close it: end_ts + duration_s
+s.close_status_session(event_id, end_ts)  # close: returns rowid or None
 s.get_status_sessions(status=..., device_id=..., since=..., until=...,
                       platform=..., limit=...)          # status blocks as dicts
 s.close()

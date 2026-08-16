@@ -357,20 +357,20 @@ class TestAppSessions:
 
     def test_close_session_sets_duration(self, in_memory_db):
         self._open(in_memory_db, start_ts=1000)
-        assert in_memory_db.close_app_session(event_id=1, end_ts=1500) is True
+        assert in_memory_db.close_app_session(event_id=1, end_ts=1500) is not None
         results = in_memory_db.get_app_sessions()
         assert results[0]["end_ts"] == 1500
         assert results[0]["duration_s"] == 0.5
 
     def test_close_session_is_idempotent(self, in_memory_db):
         self._open(in_memory_db, start_ts=1000)
-        assert in_memory_db.close_app_session(event_id=1, end_ts=1500) is True
-        assert in_memory_db.close_app_session(event_id=1, end_ts=2000) is False
+        assert in_memory_db.close_app_session(event_id=1, end_ts=1500) is not None
+        assert in_memory_db.close_app_session(event_id=1, end_ts=2000) is None
         results = in_memory_db.get_app_sessions()
         assert results[0]["end_ts"] == 1500
 
-    def test_close_unknown_session_returns_false(self, in_memory_db):
-        assert in_memory_db.close_app_session(event_id=99, end_ts=1500) is False
+    def test_close_unknown_session_returns_none(self, in_memory_db):
+        assert in_memory_db.close_app_session(event_id=99, end_ts=1500) is None
 
     def test_get_app_sessions_filtered(self, in_memory_db):
         self._open(in_memory_db, event_id=1, start_ts=1000)
@@ -406,18 +406,17 @@ class TestStatusSessions:
         assert results[0]["event_id"] == 1
         assert results[0]["end_ts"] is None
         assert results[0]["duration_s"] is None
-
     def test_close_status_sets_duration(self, in_memory_db):
         self._open(in_memory_db, start_ts=1000)
-        assert in_memory_db.close_status_session(event_id=1, end_ts=1300) is True
+        assert in_memory_db.close_status_session(event_id=1, end_ts=1300) is not None
         results = in_memory_db.get_status_sessions()
         assert results[0]["end_ts"] == 1300
         assert results[0]["duration_s"] == 0.3
 
     def test_close_status_is_idempotent(self, in_memory_db):
         self._open(in_memory_db, start_ts=1000)
-        assert in_memory_db.close_status_session(event_id=1, end_ts=1300) is True
-        assert in_memory_db.close_status_session(event_id=1, end_ts=2000) is False
+        assert in_memory_db.close_status_session(event_id=1, end_ts=1300) is not None
+        assert in_memory_db.close_status_session(event_id=1, end_ts=2000) is None
 
     def test_get_status_sessions_filtered_by_status(self, in_memory_db):
         self._open(in_memory_db, event_id=1, start_ts=1000)
@@ -516,13 +515,26 @@ class TestUrlVisits:
         assert len(in_memory_db.get_url_visits()) == 0
 
     def test_backfill_session_id(self, in_memory_db):
-        visit_id = self._write_visit(in_memory_db)
+        self._write_visit(in_memory_db)
         sess_id = in_memory_db.open_app_session(
             event_id=1, start_ts=1000, app_key="brave.exe", payload={}
         )
-        in_memory_db.backfill_url_session_id(visit_id, sess_id)
+        in_memory_db.backfill_url_sessions_for_event(event_id=1, session_id=sess_id)
         visits = in_memory_db.get_url_visits()
         assert visits[0]["session_id"] == sess_id
+
+    def test_backfill_skips_already_stamped_visits(self, in_memory_db):
+        event_id = _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.write_url_visit(
+            url="https://a.com", seen_at=1000, event_id=event_id
+        )
+        in_memory_db.write_url_visit(
+            url="https://b.com", seen_at=1100, event_id=event_id
+        )
+        in_memory_db.backfill_url_sessions_for_event(event_id=1, session_id=10)
+        in_memory_db.backfill_url_sessions_for_event(event_id=1, session_id=20)
+        visits = in_memory_db.get_url_visits()
+        assert all(v["session_id"] == 10 for v in visits)
 
 
 class TestSchemaMigration:

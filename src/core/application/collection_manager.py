@@ -49,6 +49,7 @@ class _EventBridge:
                 if url_visit and event_id is not None:
                     self._write_url_visit(watcher, url_visit, ts, event_id)
                 return
+            prev_event_id = self._last_event_id.get(watcher)
             self._last_app[watcher] = app_key
             payload = {k: v for k, v in data.items() if k != "url_visit"}
             event_id = self._storage.write_event(
@@ -60,6 +61,10 @@ class _EventBridge:
             self._last_event_id[watcher] = event_id
             if url_visit:
                 self._write_url_visit(watcher, url_visit, ts, event_id)
+            if self._platform == "windows":
+                self._produce_app_session(
+                    prev_event_id, event_id, ts, app_key, payload
+                )
             return
 
         event_id = self._storage.write_event(
@@ -69,6 +74,52 @@ class _EventBridge:
             source=watcher,
         )
         self._last_event_id[watcher] = event_id
+
+    def _produce_app_session(
+        self,
+        prev_event_id: int | None,
+        event_id: int,
+        start_ts: int,
+        app_key: str,
+        payload: dict,
+    ) -> None:
+        """Write-time app session production (Windows).
+
+        The new foreground_transition closes the previous session at its
+        own start timestamp (half-open [start, next_start)) and opens the
+        next one. The closed session's url_visits get their session_id
+        backfilled.
+        """
+        try:
+            if prev_event_id is not None:
+                session_id = self._storage.close_app_session(prev_event_id, start_ts)
+                if session_id is not None:
+                    self._storage.backfill_url_sessions_for_event(
+                        prev_event_id, session_id
+                    )
+            self._storage.open_app_session(event_id, start_ts, app_key, payload)
+        except Exception:
+            logger.exception(
+                "Failed to produce app session for event %d (app=%s)",
+                event_id,
+                app_key,
+            )
+
+    def finalize_open_sessions(self, end_ts: int) -> None:
+        """Close every still-open session/block at ``end_ts`` (collection stop)."""
+        if self._platform != "windows":
+            return
+        event_id = self._last_event_id.get("foreground")
+        if event_id is None:
+            return
+        try:
+            session_id = self._storage.close_app_session(event_id, end_ts)
+            if session_id is not None:
+                self._storage.backfill_url_sessions_for_event(event_id, session_id)
+        except Exception:
+            logger.exception(
+                "Failed to close open app session for event %d at stop", event_id
+            )
 
     def _write_url_visit(
         self, watcher: str, url_visit: dict, ts: int, event_id: int
@@ -124,7 +175,9 @@ class CollectionManager:
         self._screen_monitor_task: asyncio.Task | None = None
         self._health_monitor_task: asyncio.Task | None = None
         self._on_pause_changed = None
-        self._event_bridge = _EventBridge(self._storage, "")
+        self._event_bridge = _EventBridge(
+            self._storage, "windows" if detect_os() == OSType.WINDOWS else "android"
+        )
 
     def _create_runtime(self):
         match self._system_type:
@@ -209,6 +262,7 @@ class CollectionManager:
                 await self._screen_monitor_task
             self._screen_monitor_task = None
         await self._scheduler.stop()
+        self._event_bridge.finalize_open_sessions(utc_timestamp())
         self._storage.sync_durable_backup(force=True)
         if self._runtime:
             self._runtime.shutdown()
