@@ -24,6 +24,7 @@ DEFAULT_CONFIG = {
     "start_maximized": True,
     "afk_idle_threshold_s": 60.0,
     "afk_away_threshold_s": 300.0,
+    "onboarding_completed": False,
 }
 
 
@@ -55,6 +56,12 @@ class ConfigManager:
                 with open(self._path) as f:
                     loaded = json.load(f)
                 self._data = {**deepcopy(DEFAULT_CONFIG), **loaded}
+                if "onboarding_completed" not in loaded:
+                    # Pre-existing installs upgrading past the onboarding
+                    # feature have already used the app: never force the
+                    # first-run flow on them. Fresh installs (no file) and
+                    # corrupt configs keep the DEFAULT_CONFIG value below.
+                    self._data["onboarding_completed"] = True
                 logger.info("Config loaded from %s", self._path)
             except Exception:
                 logger.exception("Failed to load config, using defaults")
@@ -211,3 +218,11 @@ class ConfigManager:
     @afk_away_threshold_s.setter
     def afk_away_threshold_s(self, value: float) -> None:
         self._data["afk_away_threshold_s"] = max(0.0, float(value))
+
+    @property
+    def onboarding_completed(self) -> bool:
+        return self._data.get("onboarding_completed", False)
+
+    @onboarding_completed.setter
+    def onboarding_completed(self, value: bool) -> None:
+        self._data["onboarding_completed"] = bool(value)

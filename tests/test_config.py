@@ -153,6 +153,45 @@ class TestConfigLoad:
         assert cm.collection_enabled is False
 
 
+class TestOnboardingFlag:
+    def test_fresh_install_needs_onboarding(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        cm = ConfigManager(path=str(tmp_path / "config.json"))
+        cm.load()
+        assert cm.onboarding_completed is False
+
+    def test_existing_file_without_key_skips_onboarding(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"theme": "blue"}), encoding="utf-8")
+        cm = ConfigManager(path=str(p))
+        cm.load()
+        assert cm.onboarding_completed is True
+
+    def test_explicit_false_survives_reload(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"onboarding_completed": False}), encoding="utf-8")
+        cm = ConfigManager(path=str(p))
+        cm.load()
+        assert cm.onboarding_completed is False
+
+    def test_saved_flag_roundtrips(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        p = tmp_path / "config.json"
+        cm = ConfigManager(path=str(p))
+        cm.onboarding_completed = True
+        cm.save()
+
+        cm2 = ConfigManager(path=str(p))
+        cm2.load()
+        assert cm2.onboarding_completed is True
+
+
 class TestConfigSave:
     def test_save_and_reload(self, tmp_path):
         from core.config_manager import ConfigManager

@@ -9,6 +9,8 @@ loudly but gracefully.
 from __future__ import annotations
 
 import asyncio
+import json
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from sweep_helpers import mock_page
@@ -17,7 +19,15 @@ from core.event_bus import TickBus
 from core.models import Tick
 from core.storage import Storage
 from UI.layout.models import ScreenFormFactor
+from utils.paths import get_data_dir
 from utils.platform import OSType
+
+
+def _seed_completed_onboarding() -> None:
+    """Mark onboarding done in the per-test data dir (post-boot scenarios)."""
+    path = Path(get_data_dir()) / "config.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"onboarding_completed": True}), encoding="utf-8")
 
 
 class TestStartupUpdateCheck:
@@ -185,6 +195,7 @@ class TestBusSubscriberResilience:
 class TestAppAndroidBoot:
     @staticmethod
     def _android_app(permission_granted: bool):
+        _seed_completed_onboarding()
         page = mock_page()
         page.window.width = 400
         page.window.height = 800
@@ -217,6 +228,7 @@ class TestAppAutoStartWiring:
 
         config = ConfigManager(path=str(tmp_path / "config.json"))
         config.auto_start_enabled = True
+        config.onboarding_completed = True
         config.save()
 
         page = mock_page()
@@ -239,6 +251,7 @@ class TestAppAutoStartWiring:
 
         config = ConfigManager(path=str(tmp_path / "config.json"))
         config.auto_start_enabled = True
+        config.onboarding_completed = True
         config.save()
 
         page = mock_page()
