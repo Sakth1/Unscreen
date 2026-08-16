@@ -264,6 +264,99 @@ class TestEventBridge:
         sessions = in_memory_db.get_app_sessions()
         assert visits[0]["session_id"] == sessions[0]["id"]
 
+    def test_status_sessions_produced_on_windows_entries(self, in_memory_db):
+        from datetime import datetime, timedelta, timezone
+
+        bridge = _EventBridge(in_memory_db, "windows")
+        t0 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+        bridge(
+            Tick(
+                watcher="afk",
+                data={"status": "active", "idle_seconds": 5.0},
+                timestamp=t0,
+            )
+        )
+        t1 = t0 + timedelta(seconds=90)
+        bridge(
+            Tick(
+                watcher="afk",
+                data={"status": "idle", "idle_seconds": 65.0},
+                timestamp=t1,
+            )
+        )
+        blocks = in_memory_db.get_status_sessions()
+        assert len(blocks) == 2
+        active_block, idle_block = blocks
+        assert active_block["status"] == "active"
+        assert active_block["end_ts"] == int(t1.timestamp() * 1000)
+        assert active_block["duration_s"] == 90.0
+        assert idle_block["status"] == "idle"
+        assert idle_block["end_ts"] is None  # still open
+        events = in_memory_db.get_raw_events()
+        assert active_block["event_id"] == events[0]["id"]
+        assert idle_block["event_id"] == events[1]["id"]
+
+    def test_duplicate_status_entries_each_get_a_block(self, in_memory_db):
+        """Bridge contract: one status block per received idle event.
+
+        Status-change dedup (F1) lives in AfkWatcher, not the bridge — a
+        raw feed of N entries yields N blocks with half-open intervals.
+        """
+        from datetime import datetime, timedelta, timezone
+
+        bridge = _EventBridge(in_memory_db, "windows")
+        t0 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+        bridge(
+            Tick(
+                watcher="afk",
+                data={"status": "idle", "idle_seconds": 61.0},
+                timestamp=t0,
+            )
+        )
+        bridge(
+            Tick(
+                watcher="afk",
+                data={"status": "idle", "idle_seconds": 62.0},
+                timestamp=t0 + timedelta(seconds=5),
+            )
+        )
+        blocks = in_memory_db.get_status_sessions()
+        assert len(blocks) == 2
+        assert blocks[0]["end_ts"] == int((t0 + timedelta(seconds=5)).timestamp() * 1000)
+        assert blocks[1]["end_ts"] is None
+
+    def test_android_produces_no_status_sessions(self, in_memory_db):
+        from datetime import datetime, timezone
+
+        bridge = _EventBridge(in_memory_db, "android")
+        bridge(
+            Tick(
+                watcher="android_afk",
+                data={"present": True, "screen_on": True},
+                timestamp=datetime(2026, 7, 19, tzinfo=timezone.utc),
+            )
+        )
+        assert len(in_memory_db.get_status_sessions()) == 0
+
+    def test_finalize_closes_open_status_block(self, in_memory_db):
+        from datetime import datetime, timedelta, timezone
+
+        bridge = _EventBridge(in_memory_db, "windows")
+        t0 = datetime(2026, 7, 19, tzinfo=timezone.utc)
+        bridge(
+            Tick(
+                watcher="afk",
+                data={"status": "away", "idle_seconds": 400.0},
+                timestamp=t0,
+            )
+        )
+        stop = t0 + timedelta(minutes=2)
+        bridge.finalize_open_sessions(int(stop.timestamp() * 1000))
+        blocks = in_memory_db.get_status_sessions()
+        assert len(blocks) == 1
+        assert blocks[0]["end_ts"] == int(stop.timestamp() * 1000)
+        assert blocks[0]["duration_s"] == 120.0
+
     def test_url_visit_reuses_cached_event_id_on_tab_change(self, in_memory_db):
         bridge = _EventBridge(in_memory_db, "windows")
         bridge(
