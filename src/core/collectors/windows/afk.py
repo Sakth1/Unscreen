@@ -47,8 +47,17 @@ class AfkWatcher:
             enabled=True,
         )
         self._app_config = app_config
+        self._last_status: str | None = None
 
     async def tick(self) -> Tick | None:
+        """Poll idle time; emit a tick only when the status changed.
+
+        The idle/away state machine is write-on-change: a tick carrying the
+        same ``status`` as the previous one is dropped (returns ``None``),
+        so `idle_transition` rows mark block starts instead of a 5 s
+        heartbeat. The first tick after startup always emits — entering a
+        state is a change.
+        """
         try:
             idle = _idle_seconds()
             idle_threshold = (
@@ -62,16 +71,18 @@ class AfkWatcher:
                 status = "away"
             elif idle > idle_threshold:
                 status = "idle"
-            return Tick(
-                watcher="afk",
-                data={
-                    "status": status,
-                    "idle_seconds": idle,
-                },
-            )
         except Exception:
             logger.exception("AfkWatcher tick failed")
-            return Tick(
-                watcher="afk",
-                data={"status": "active", "idle_seconds": 0.0},
-            )
+            status = "active"
+            idle = 0.0
+
+        if status == self._last_status:
+            return None
+        self._last_status = status
+        return Tick(
+            watcher="afk",
+            data={
+                "status": status,
+                "idle_seconds": idle,
+            },
+        )
