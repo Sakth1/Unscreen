@@ -66,6 +66,36 @@ class TestWindowsAfkHardening:
         assert tick is not None
         assert tick.data["status"] == "away"
 
+    async def test_unchanged_status_skips_tick(self):
+        from core.collectors.windows.afk import AfkWatcher
+
+        with patch("core.collectors.windows.afk._idle_seconds", return_value=10.0):
+            w = AfkWatcher()
+            first = await w.tick()
+            assert first is not None
+
+            for _ in range(3):
+                assert await w.tick() is None, "unchanged status must be skipped"
+
+    async def test_status_change_emits_tick(self):
+        from core.collectors.windows.afk import AfkWatcher
+
+        with patch("core.collectors.windows.afk._idle_seconds", return_value=10.0):
+            w = AfkWatcher()
+            assert await w.tick() is not None  # active
+            assert await w.tick() is None  # still active
+
+        with patch("core.collectors.windows.afk._idle_seconds", return_value=120.0):
+            idle_tick = await w.tick()
+            assert idle_tick is not None
+            assert idle_tick.data["status"] == "idle"
+            assert await w.tick() is None  # still idle
+
+        with patch("core.collectors.windows.afk._idle_seconds", return_value=10.0):
+            active_tick = await w.tick()
+            assert active_tick is not None
+            assert active_tick.data["status"] == "active"
+
 
 class TestWindowsPowerHardening:
     async def test_tick_returns_defaults_on_psutil_failure(self):

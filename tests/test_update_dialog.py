@@ -118,9 +118,7 @@ class TestShowUpdateDialog:
 
     def test_manual_only_dialog_omits_install(self, monkeypatch):
         reset_app_state()
-        monkeypatch.setattr(
-            "UI.components.update_dialog.is_packaged", lambda: False
-        )
+        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: False)
         page = mock_page()
         page.height = 800
         from UI.components.update_dialog import show_update_dialog
@@ -172,9 +170,7 @@ class TestShowUpdateDialog:
 
     def test_install_flow_updates_state(self, monkeypatch):
         reset_app_state()
-        monkeypatch.setattr(
-            "UI.components.update_dialog.is_packaged", lambda: True
-        )
+        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: True)
         page = mock_page()
         page.height = 800
         from UI.components.update_dialog import show_update_dialog

@@ -133,7 +133,7 @@ def _seed_version(db_path: str, version: int) -> None:
     conn.close()
 
 
-def _assert_schema_v7(conn) -> None:
+def _assert_schema_v8(conn) -> None:
     tables = {
         r[0]
         for r in conn.execute(
@@ -145,7 +145,8 @@ def _assert_schema_v7(conn) -> None:
         "event_types",
         "sources",
         "raw_events",
-        "sessions",
+        "app_sessions",
+        "status_sessions",
         "url_visits",
         "sync_cursors",
     ):
@@ -164,9 +165,12 @@ def _assert_schema_v7(conn) -> None:
         "uq_raw_events_identity",
         "idx_raw_events_device_ts",
         "idx_raw_events_type_ts",
-        "uq_sessions_identity",
-        "idx_sessions_device_app",
-        "idx_sessions_ts",
+        "uq_app_sessions_identity",
+        "idx_app_sessions_device_app",
+        "idx_app_sessions_ts",
+        "uq_status_sessions_identity",
+        "idx_status_sessions_ts",
+        "idx_status_sessions_status",
         "uq_url_visits_identity",
         "idx_url_visits_device_seen",
         "idx_url_visits_device_domain",
@@ -200,7 +204,8 @@ class TestWriteEvent:
             "event_types", "foreground_transition", in_memory_db._event_type_ids
         )
         assert rows[0][4] == T0_MS
-        assert len(rows[0][7]) == 16  # payload_hash BLOB
+        assert isinstance(rows[0][7], int)  # payload_hash INTEGER
+        assert -(2**63) <= rows[0][7] < 2**63
 
     def test_get_raw_events_returns_event(self, in_memory_db, make_tick):
         in_memory_db.write_event(
@@ -267,20 +272,15 @@ class TestWriteEvent:
         assert len(in_memory_db.get_raw_events()) == 0
 
     def test_clear_all_data_clears_sessions(self, in_memory_db):
-        in_memory_db.write_canonical_session(
-            {
-                "device_id": "test",
-                "platform": "windows",
-                "start_ts": 1000,
-                "end_ts": 1100,
-                "duration_s": 100.0,
-                "app_key": "Code.exe",
-                "payload": {},
-                "session_type": "foreground",
-            }
+        in_memory_db.open_app_session(
+            event_id=1, start_ts=1000, app_key="Code.exe", payload={}
+        )
+        in_memory_db.open_status_session(
+            event_id=2, start_ts=1000, status="idle", payload={}
         )
         in_memory_db.clear_all_data()
-        assert len(in_memory_db.get_canonical_sessions()) == 0
+        assert len(in_memory_db.get_app_sessions()) == 0
+        assert len(in_memory_db.get_status_sessions()) == 0
 
     def test_clear_all_data_clears_sync_cursors(self, in_memory_db):
         in_memory_db._conn.execute(
@@ -336,41 +336,97 @@ class TestEventDedup:
         assert len(in_memory_db.get_raw_events()) == 2
 
 
-class TestCanonicalSessions:
-    def test_write_and_read_session(self, in_memory_db):
-        in_memory_db.write_canonical_session(
-            {
-                "device_id": "test",
-                "platform": "windows",
-                "start_ts": 1000,
-                "end_ts": 1100,
-                "duration_s": 100.0,
-                "app_key": "Code.exe",
-                "payload": {"title": "main.py"},
-                "session_type": "foreground",
-            }
+class TestAppSessions:
+    def _open(self, db: Storage, event_id: int = 1, start_ts: int = 1000):
+        return db.open_app_session(
+            event_id=event_id,
+            start_ts=start_ts,
+            app_key="Code.exe",
+            payload={"title": "main.py"},
         )
-        results = in_memory_db.get_canonical_sessions()
+
+    def test_open_session_has_no_end(self, in_memory_db):
+        self._open(in_memory_db)
+        results = in_memory_db.get_app_sessions()
         assert len(results) == 1
         assert results[0]["app_key"] == "Code.exe"
         assert results[0]["payload"]["title"] == "main.py"
+        assert results[0]["event_id"] == 1
+        assert results[0]["end_ts"] is None
+        assert results[0]["duration_s"] is None
 
-    def test_get_canonical_sessions_filtered(self, in_memory_db):
-        for app in ["Code.exe", "brave.exe"]:
-            in_memory_db.write_canonical_session(
-                {
-                    "device_id": "test",
-                    "platform": "windows",
-                    "start_ts": 1000,
-                    "end_ts": 1100,
-                    "duration_s": 100.0,
-                    "app_key": app,
-                    "payload": {},
-                    "session_type": "foreground",
-                }
-            )
-        results = in_memory_db.get_canonical_sessions(app_key="Code.exe")
+    def test_close_session_sets_duration(self, in_memory_db):
+        self._open(in_memory_db, start_ts=1000)
+        assert in_memory_db.close_app_session(event_id=1, end_ts=1500) is not None
+        results = in_memory_db.get_app_sessions()
+        assert results[0]["end_ts"] == 1500
+        assert results[0]["duration_s"] == 0.5
+
+    def test_close_session_is_idempotent(self, in_memory_db):
+        self._open(in_memory_db, start_ts=1000)
+        assert in_memory_db.close_app_session(event_id=1, end_ts=1500) is not None
+        assert in_memory_db.close_app_session(event_id=1, end_ts=2000) is None
+        results = in_memory_db.get_app_sessions()
+        assert results[0]["end_ts"] == 1500
+
+    def test_close_unknown_session_returns_none(self, in_memory_db):
+        assert in_memory_db.close_app_session(event_id=99, end_ts=1500) is None
+
+    def test_get_app_sessions_filtered(self, in_memory_db):
+        self._open(in_memory_db, event_id=1, start_ts=1000)
+        self._open(in_memory_db, event_id=2, start_ts=1100)
+        in_memory_db.close_app_session(event_id=1, end_ts=1050)
+        results = in_memory_db.get_app_sessions(app_key="Code.exe")
+        assert len(results) == 2
+        results = in_memory_db.get_app_sessions(since=1050)
         assert len(results) == 1
+        assert results[0]["event_id"] == 2
+        results = in_memory_db.get_app_sessions(until=1050)
+        assert len(results) == 1
+        assert results[0]["event_id"] == 1
+        results = in_memory_db.get_app_sessions(limit=1)
+        assert len(results) == 1
+
+
+class TestStatusSessions:
+    def _open(self, db: Storage, event_id: int = 1, start_ts: int = 1000):
+        return db.open_status_session(
+            event_id=event_id,
+            start_ts=start_ts,
+            status="idle",
+            payload={"idle_seconds": 61.0},
+        )
+
+    def test_open_status_has_no_end(self, in_memory_db):
+        self._open(in_memory_db)
+        results = in_memory_db.get_status_sessions()
+        assert len(results) == 1
+        assert results[0]["status"] == "idle"
+        assert results[0]["payload"]["idle_seconds"] == 61.0
+        assert results[0]["event_id"] == 1
+        assert results[0]["end_ts"] is None
+        assert results[0]["duration_s"] is None
+
+    def test_close_status_sets_duration(self, in_memory_db):
+        self._open(in_memory_db, start_ts=1000)
+        assert in_memory_db.close_status_session(event_id=1, end_ts=1300) is not None
+        results = in_memory_db.get_status_sessions()
+        assert results[0]["end_ts"] == 1300
+        assert results[0]["duration_s"] == 0.3
+
+    def test_close_status_is_idempotent(self, in_memory_db):
+        self._open(in_memory_db, start_ts=1000)
+        assert in_memory_db.close_status_session(event_id=1, end_ts=1300) is not None
+        assert in_memory_db.close_status_session(event_id=1, end_ts=2000) is None
+
+    def test_get_status_sessions_filtered_by_status(self, in_memory_db):
+        self._open(in_memory_db, event_id=1, start_ts=1000)
+        in_memory_db.open_status_session(
+            event_id=2, start_ts=1200, status="active", payload={}
+        )
+        results = in_memory_db.get_status_sessions(status="idle")
+        assert len(results) == 1
+        assert results[0]["event_id"] == 1
 
 
 class TestUrlVisits:
@@ -460,29 +516,33 @@ class TestUrlVisits:
         assert len(in_memory_db.get_url_visits()) == 0
 
     def test_backfill_session_id(self, in_memory_db):
-        visit_id = self._write_visit(in_memory_db)
-        sess_id = in_memory_db.write_canonical_session(
-            {
-                "device_id": "test",
-                "platform": "windows",
-                "start_ts": 1000,
-                "end_ts": 1100,
-                "duration_s": 100.0,
-                "app_key": "brave.exe",
-                "payload": {},
-                "session_type": "foreground",
-            }
+        self._write_visit(in_memory_db)
+        sess_id = in_memory_db.open_app_session(
+            event_id=1, start_ts=1000, app_key="brave.exe", payload={}
         )
-        in_memory_db.backfill_url_session_id(visit_id, sess_id)
+        in_memory_db.backfill_url_sessions_for_event(event_id=1, session_id=sess_id)
         visits = in_memory_db.get_url_visits()
         assert visits[0]["session_id"] == sess_id
+
+    def test_backfill_skips_already_stamped_visits(self, in_memory_db):
+        event_id = _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.write_url_visit(
+            url="https://a.com", seen_at=1000, event_id=event_id
+        )
+        in_memory_db.write_url_visit(
+            url="https://b.com", seen_at=1100, event_id=event_id
+        )
+        in_memory_db.backfill_url_sessions_for_event(event_id=1, session_id=10)
+        in_memory_db.backfill_url_sessions_for_event(event_id=1, session_id=20)
+        visits = in_memory_db.get_url_visits()
+        assert all(v["session_id"] == 10 for v in visits)
 
 
 class TestSchemaMigration:
     def test_fresh_db_gets_current_version(self, tmp_path):
         db = str(tmp_path / "test.db")
         storage = Storage(db_path=db)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
         storage.close()
 
     def test_migration_skipped_when_up_to_date(self, tmp_path):
@@ -493,7 +553,7 @@ class TestSchemaMigration:
         storage1.close()
 
         storage2 = Storage(db_path=db)
-        assert storage2._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert storage2._conn.execute("PRAGMA user_version").fetchone()[0] == 8
         events = storage2.get_raw_events()
         assert len(events) == 1
         assert events[0]["payload"]["app"] == "Code.exe"
@@ -503,7 +563,7 @@ class TestSchemaMigration:
         db = str(tmp_path / "test.db")
         for i in range(5):
             storage = Storage(db_path=db)
-            assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+            assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
             if i == 0:
                 _write_fg_event(storage)
             storage.close()
@@ -535,8 +595,8 @@ class TestSchemaMigration:
         conn.close()
 
         storage = Storage(db_path=db)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
-        _assert_schema_v7(storage._conn)
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        _assert_schema_v8(storage._conn)
         assert len(storage.get_raw_events()) == 0, "pre-v7 data must be wiped"
         storage.close()
 
@@ -558,8 +618,8 @@ class TestSchemaMigration:
         conn.close()
 
         storage = Storage(db_path=db)
-        _assert_schema_v7(storage._conn)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        _assert_schema_v8(storage._conn)
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
         storage.close()
 
     def test_v1_db_is_wiped_and_recreated(self, tmp_path):
@@ -575,8 +635,8 @@ class TestSchemaMigration:
         conn.close()
 
         storage = Storage(db_path=db)
-        _assert_schema_v7(storage._conn)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        _assert_schema_v8(storage._conn)
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
         storage.close()
 
     def test_interrupted_migration_recovery(self, tmp_path):
@@ -603,8 +663,8 @@ class TestSchemaMigration:
         conn.close()
 
         storage = Storage(db_path=db)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
-        _assert_schema_v7(storage._conn)
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        _assert_schema_v8(storage._conn)
         storage.close()
 
     def test_wipe_deletes_durable_backup(self, tmp_path, monkeypatch):
@@ -632,21 +692,21 @@ class TestSchemaMigration:
         monkeypatch.setattr("core.storage.is_android", lambda: True)
 
         storage = Storage(db_path=db)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
         assert deleted == [db]
         storage.close()
 
     def test_schema_integrity_after_migration(self, tmp_path):
         db = str(tmp_path / "test.db")
         storage = Storage(db_path=db)
-        _assert_schema_v7(storage._conn)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
+        _assert_schema_v8(storage._conn)
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
         storage.close()
 
     def test_migration_on_memory_db(self):
         storage = Storage(db_path=":memory:")
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 7
-        _assert_schema_v7(storage._conn)
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        _assert_schema_v8(storage._conn)
         storage.close()
 
 

@@ -556,7 +556,9 @@ class TestDataDiagnosticsSection:
         assert kwargs["file_name"].endswith(".db")
         assert kwargs["src_bytes"].startswith(b"SQLite format 3\x00")
 
-    async def test_export_db_cancelled_picker_writes_nothing(self, tmp_path, monkeypatch):
+    async def test_export_db_cancelled_picker_writes_nothing(
+        self, tmp_path, monkeypatch
+    ):
         from sweep_helpers import mock_page
 
         from UI.screens.settings.data import DataDiagnostics

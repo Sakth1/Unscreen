@@ -139,3 +139,31 @@ canonical store was redesigned to stay small as the timeline grows:
 - **Pre-v7 databases are wiped and recreated fresh — no data migration**
   (early-stage policy; the Android durable backup is deleted during the
   wipe). This replaces the phased migration plan above, which is obsolete.
+
+## Schema v8 update (v0.4.10-dev) — write-time session production
+
+Principles 2 and 3 of this ADR are **amended** for Windows:
+
+- **Duration is computed from event timestamps at write time, not stored
+  at collection time.** The event bridge still never fabricates duration
+  — it computes it from the *next* event's timestamp. The invariant
+  "duration is derived from timestamps, never authored" is unchanged; only
+  the moment of derivation moved from a batch reconstructor to the write
+  path.
+- **Sessions are produced, not reconstructed.** `sessions` is renamed
+  `app_sessions`; on every `foreground_transition` write the bridge opens
+  a session for the new event (`event_id` FK, NOT NULL) and closes the
+  previous one at the new event's timestamp (`end_ts`,
+  `duration_s = (end_ts - start_ts) / 1000`). The open session is closed
+  on collection stop. Sessions remain disposable and idempotent per event
+  (`UNIQUE(device_fk, event_id)`), and `url_visits.session_id` is
+  backfilled at close time.
+- **Status blocks are a second derived table.** `status_sessions` records
+  one row per `idle_transition` entry (every status, including `active`),
+  closed the same way at the next entry or on stop. This replaces the
+  planned StateBlock reconstructor for Windows idle; Android
+  (`user_presence`) stays event-only for now.
+- **`payload_hash` is an 8-byte blake2b stored as INTEGER** (was a 16-byte
+  BLOB). Same dedup semantics, half the storage.
+- **Pre-v8 databases are wiped and recreated fresh** — same early-stage
+  policy, extended to v8.

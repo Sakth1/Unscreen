@@ -235,7 +235,7 @@ class UrlExtractor:
                 except Exception:
                     continue
         except Exception:
-            pass
+            logger.debug("UIA address-bar probe failed for pid %d", fg_pid)
         return None
 
     @staticmethod
@@ -282,7 +282,7 @@ class UrlExtractor:
                 for prof in info:
                     profiles.append(prof)
             except Exception:
-                pass
+                logger.debug("Failed to read 'Local State' of %s", key)
 
         seen_dirs: set[str] = set()
         for prof in profiles:

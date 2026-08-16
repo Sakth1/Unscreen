@@ -99,32 +99,49 @@ CREATE TABLE IF NOT EXISTS raw_events (
     timestamp     INTEGER NOT NULL,          -- Unix epoch ms (UTC) — when the event occurred
     collected_at  INTEGER NOT NULL,          -- Unix epoch ms (UTC) — when we observed it
     payload       TEXT NOT NULL,             -- JSON payload, type-specific
-    payload_hash  BLOB NOT NULL              -- 16-byte blake2b of canonical payload JSON
+    payload_hash  INTEGER NOT NULL           -- 8-byte blake2b of canonical payload JSON
 );
 ```
 
 `UNIQUE(device_fk, event_type_fk, timestamp, payload_hash)` makes sync re-imports idempotent: Android's same-millisecond `app_usage_interval` fan-out is admitted (distinct payloads → distinct hashes), identical re-imports are rejected.
 
-### `sessions` — derived sessions (shared, not per-device)
+### `app_sessions` — derived app sessions (Windows, produced at write time)
 
-Sessions are reconstructed deterministically from `raw_events` (reconstructor planned). Written via `write_canonical_session()`.
+One row per `foreground_transition` (referenced by `event_id`). The event bridge opens the row at write time and closes it at the next transition's start (`end_ts`, `duration_s`); collection stop closes the last one. Android has no producer yet.
 
 ```sql
-CREATE TABLE IF NOT EXISTS sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_fk     INTEGER NOT NULL REFERENCES devices(id),
-    start_ts      INTEGER NOT NULL,          -- Unix epoch ms (UTC)
-    end_ts        INTEGER,
-    duration_s    REAL,
-    app_key       TEXT NOT NULL,
-    payload       TEXT NOT NULL,
-    session_type  TEXT DEFAULT 'foreground'
+CREATE TABLE IF NOT EXISTS app_sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_fk  INTEGER NOT NULL REFERENCES devices(id),
+    event_id   INTEGER NOT NULL REFERENCES raw_events(id),
+    start_ts   INTEGER NOT NULL,          -- Unix epoch ms (UTC)
+    end_ts     INTEGER,                   -- NULL while open
+    duration_s REAL,                      -- (end_ts - start_ts) / 1000
+    app_key    TEXT NOT NULL,
+    payload    TEXT NOT NULL
+);
+```
+
+### `status_sessions` — Windows idle status blocks (produced at write time)
+
+One row per `idle_transition` entry (every status, including `active`), opened at write time and closed at the next entry or on collection stop.
+
+```sql
+CREATE TABLE IF NOT EXISTS status_sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_fk  INTEGER NOT NULL REFERENCES devices(id),
+    event_id   INTEGER NOT NULL REFERENCES raw_events(id),
+    start_ts   INTEGER NOT NULL,          -- Unix epoch ms (UTC)
+    end_ts     INTEGER,                   -- NULL while open
+    duration_s REAL,                      -- (end_ts - start_ts) / 1000
+    status     TEXT NOT NULL,             -- 'active' | 'idle' | 'away'
+    payload    TEXT NOT NULL
 );
 ```
 
 ### `url_visits` — URL visit log (Windows only)
 
-`event_id` is populated at write time by the event bridge and is NOT NULL — it always points at the owning `foreground_transition`. `session_id` is filled in later by the session reconstructor (derived data, nullable).
+`event_id` is populated at write time by the event bridge and is NOT NULL — it always points at the owning `foreground_transition`. `session_id` is backfilled when the owning app session closes (derived data, nullable).
 
 ```sql
 CREATE TABLE IF NOT EXISTS url_visits (
