@@ -31,6 +31,7 @@ src/UI/
 │   ├── settings_tile.py      # Label + control row for settings
 │   ├── filter_chips.py       # Date picker + watcher filter chips
 │   └── update_dialog.py      # Update available dialog with progress
+├── markdown_notes.py         # Release-notes sanitize + ft.Markdown builder
 ├── services/
 │   ├── __init__.py
 │   ├── router.py             # page.views routing definitions
@@ -142,7 +143,11 @@ subscribers registered via `on_change(key, callback)`:
 `get_app_state()` returns the process-wide singleton; `reset_app_state()`
 replaces it (used by tests). Wiring: `CollectionManager` pushes collection
 state and ticks, `RouteManager` pushes the route, `App` pushes the layout.
-Update-state writes are wired when the update UI ships.
+Update-state writes are pushed by the update UI: the startup snackbar and
+the update dialog (`UI/components/update_dialog.py`) record
+AVAILABLE → DOWNLOADING → READY → APPLYING (or FAILED / IDLE on cancel)
+plus download progress and errors; the App Info settings card renders an
+update-status chip from those writes.
 
 ## Auto-Update Architecture
 
