@@ -349,6 +349,39 @@ begin
   Log('Uninstall key registered explicitly at: ' + UninstallKeyBase);
 end;
 
+{ Refresh the version-bearing values of an existing uninstall key. Inno's own
+  registration on upgrade is unreliable on some systems, leaving a stale
+  DisplayVersion (e.g. 0.4.6) in Programs & Features after an update. }
+procedure RefreshUninstallKey;
+var
+  Root: Integer;
+begin
+  if IsAdminInstallMode then
+    Root := HKLM
+  else
+    Root := HKCU;
+
+  if not RegKeyExists(Root, UninstallKeyBase) then
+    Exit;
+
+  Log('Refreshing version fields of existing uninstall key.');
+  RegWriteStringValue(Root, UninstallKeyBase, 'DisplayName',
+    '{#MyAppName} {#MyAppVersion}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'DisplayVersion',
+    '{#MyAppVersionNumeric}');
+  RegWriteStringValue(Root, UninstallKeyBase, 'DisplayIcon',
+    ExpandConstant('{app}\{#MyAppExeName}'));
+  RegWriteStringValue(Root, UninstallKeyBase, 'InstallLocation',
+    ExpandConstant('{app}\'));
+  RegWriteStringValue(Root, UninstallKeyBase, 'UninstallString',
+    '"' + ExpandConstant('{uninstallexe}') + '"');
+  RegWriteStringValue(Root, UninstallKeyBase, 'QuietUninstallString',
+    '"' + ExpandConstant('{uninstallexe}') + '" /SILENT');
+  RegWriteStringValue(Root, UninstallKeyBase, 'ModifyPath',
+    ExpandConstant('{app}\Unscreen-Setup.exe /maintenance'));
+  Log('Uninstall key refreshed with version {#MyAppVersionNumeric}.');
+end;
+
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
@@ -358,6 +391,7 @@ begin
     // point, even without a network fetch.
     FileCopy(ExpandConstant('{srcexe}'), ExpandConstant('{app}\Unscreen-Setup.exe'), False);
     EnsureUninstallKey();
+    RefreshUninstallKey();
   end;
 end;
 
