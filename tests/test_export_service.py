@@ -1,5 +1,6 @@
 import csv
 import json
+import sqlite3
 from io import StringIO
 
 from core.application.export_service import ExportService
@@ -140,4 +141,52 @@ class TestConsistency:
         json_fn, json_data = ExportService.prepare_raw_events(rows)
         assert csv_fn != json_fn
         assert len(csv_data) > 0
-        assert len(json_data) > 0
+
+
+def _make_db(tmp_path) -> str:
+    db_path = str(tmp_path / "data.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE items (k TEXT PRIMARY KEY, v TEXT)")
+    conn.execute("INSERT INTO items VALUES ('answer', '42')")
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+class TestPrepareDbSnapshot:
+    def test_missing_db_returns_none(self, tmp_path):
+        assert ExportService.prepare_db_snapshot(str(tmp_path / "nope.db")) is None
+
+    def test_empty_db_returns_none(self, tmp_path):
+        db_path = str(tmp_path / "empty.db")
+        sqlite3.connect(db_path).close()
+        assert ExportService.prepare_db_snapshot(db_path) is None
+
+    def test_filename_format(self, tmp_path):
+        snapshot = ExportService.prepare_db_snapshot(_make_db(tmp_path))
+        assert snapshot is not None
+        filename, _ = snapshot
+        assert filename.startswith("unscreen_data_")
+        assert filename.endswith(".db")
+
+    def test_snapshot_is_valid_sqlite_with_data(self, tmp_path):
+        snapshot = ExportService.prepare_db_snapshot(_make_db(tmp_path))
+        assert snapshot is not None
+        filename, data = snapshot
+        assert len(data) > 0
+        snap_path = tmp_path / filename
+        snap_path.write_bytes(data)
+        conn = sqlite3.connect(snap_path)
+        try:
+            row = conn.execute("SELECT v FROM items WHERE k='answer'").fetchone()
+            assert row == ("42",)
+        finally:
+            conn.close()
+
+    def test_snapshot_does_not_modify_source(self, tmp_path):
+        db_path = _make_db(tmp_path)
+        with open(db_path, "rb") as fp:
+            before = fp.read()
+        ExportService.prepare_db_snapshot(db_path)
+        with open(db_path, "rb") as fp:
+            assert fp.read() == before

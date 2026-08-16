@@ -16,6 +16,7 @@ from UI.screens.settings.builders import section_scaffold
 from UI.screens.settings.settings_card import SettingsCard
 from utils.flet_helpers import safe_update, show_snack_bar
 from utils.paths import get_export_dir
+from utils.platform import is_android
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +68,12 @@ class DataDiagnostics(ft.Container):
             icon=ft.Icons.DOWNLOAD,
             on_click=self._export_json,
         )
+        self._export_db_btn = ft.OutlinedButton(
+            "Export database",
+            icon=ft.Icons.SAVE_ALT,
+            on_click=self._export_db,
+        )
+        self._file_picker = ft.FilePicker()
 
         self._view_logs_btn = ft.OutlinedButton(
             "View recent logs",
@@ -99,9 +106,16 @@ class DataDiagnostics(ft.Container):
             SettingsCard(
                 "Export",
                 [
-                    ft.Text("Download all collected raw events to a file."),
+                    ft.Text(
+                        "Download all collected raw events, or a copy of the "
+                        "local database, to a file."
+                    ),
                     ft.Row(
-                        controls=[self._export_csv_btn, self._export_json_btn],
+                        controls=[
+                            self._export_csv_btn,
+                            self._export_json_btn,
+                            self._export_db_btn,
+                        ],
                         wrap=True,
                         run_spacing=8,
                     ),
@@ -172,6 +186,73 @@ class DataDiagnostics(ft.Container):
             self._toast("Export failed")
             return
         self._toast(f"Exported to {path}")
+
+    def _export_db(self, _event) -> None:
+        if self._collection_manager is None:
+            self._toast("Collection services unavailable")
+            return
+        if self._page is not None:
+            self._page.overlay.append(self._file_picker)
+            self._page.run_task(self._export_db_pick_location)
+            return
+        self._export_db_direct()
+
+    async def _export_db_pick_location(self) -> None:
+        snapshot = self._db_snapshot()
+        if snapshot is None:
+            return
+        filename, data = snapshot
+        picker = self._file_picker
+        try:
+            if is_android():
+                path = await picker.save_file(
+                    file_name=filename,
+                    src_bytes=data,
+                )
+            else:
+                directory = await picker.get_directory_path(
+                    dialog_title="Choose export folder",
+                )
+                if directory is None:
+                    return
+                path = os.path.join(directory, filename)
+                with open(path, "wb") as fp:
+                    fp.write(data)
+        except Exception:
+            logger.exception("Database export failed")
+            self._toast("Export failed")
+            return
+        if path:
+            self._toast(f"Exported to {path}")
+
+    def _export_db_direct(self) -> None:
+        snapshot = self._db_snapshot()
+        if snapshot is None:
+            return
+        filename, data = snapshot
+        try:
+            path = os.path.join(get_export_dir(), filename)
+            with open(path, "wb") as fp:
+                fp.write(data)
+        except Exception:
+            logger.exception("Database export failed")
+            self._toast("Export failed")
+            return
+        self._toast(f"Exported to {path}")
+
+    def _db_snapshot(self) -> tuple[str, bytes] | None:
+        try:
+            snapshot = ExportService.prepare_db_snapshot(
+                self._collection_manager.storage.db_path
+            )
+        except Exception:
+            logger.exception("Failed to snapshot the database")
+            self._toast("Could not read the database")
+            return None
+        if snapshot is None:
+            self._toast("Nothing to export yet")
+            return None
+        return snapshot
 
     def _view_logs(self, _event) -> None:
         if self._page is None:

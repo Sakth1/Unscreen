@@ -1,6 +1,7 @@
 import logging
+import sqlite3
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import flet as ft
 import pytest
@@ -21,6 +22,16 @@ def _event(value):
 
 def _config(tmp_path) -> ConfigManager:
     return ConfigManager(path=str(tmp_path / "config.json"))
+
+
+def _make_db(tmp_path) -> str:
+    db_path = str(tmp_path / "data.db")
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE items (k TEXT PRIMARY KEY, v TEXT)")
+    conn.execute("INSERT INTO items VALUES ('answer', '42')")
+    conn.commit()
+    conn.close()
+    return db_path
 
 
 def _walk(control):
@@ -458,6 +469,116 @@ class TestDataDiagnosticsSection:
         assert any(
             section._export_csv_btn in (row.controls or []) for row in rows
         ), "export buttons are not in a wrapping row"
+        assert any(
+            section._export_db_btn in (row.controls or []) for row in rows
+        ), "database export button is not in a wrapping row"
+
+    def test_export_db_requires_collection_manager(self, tmp_path):
+        from UI.screens.settings.data import DataDiagnostics
+
+        section = DataDiagnostics(config=_config(tmp_path))
+        section._export_db(None)
+        assert list(tmp_path.iterdir()) == []
+
+    def test_export_db_direct_fallback_writes_file(self, tmp_path, monkeypatch):
+        from UI.screens.settings.data import DataDiagnostics
+
+        db_path = _make_db(tmp_path)
+        cm = MagicMock()
+        cm.storage.db_path = db_path
+        monkeypatch.setattr(
+            "UI.screens.settings.data.get_export_dir", lambda: str(tmp_path)
+        )
+
+        section = DataDiagnostics(config=_config(tmp_path), collection_manager=cm)
+        section._export_db_direct()
+
+        files = [p.name for p in tmp_path.iterdir()]
+        assert any(f.startswith("unscreen_data_") and f.endswith(".db") for f in files)
+
+    def test_export_db_missing_snapshot_is_noop(self, tmp_path, monkeypatch):
+        from UI.screens.settings.data import DataDiagnostics
+
+        cm = MagicMock()
+        cm.storage.db_path = str(tmp_path / "missing.db")
+        monkeypatch.setattr(
+            "UI.screens.settings.data.get_export_dir", lambda: str(tmp_path)
+        )
+
+        section = DataDiagnostics(config=_config(tmp_path), collection_manager=cm)
+        section._export_db_direct()
+        assert list(tmp_path.iterdir()) == []
+
+    async def test_export_db_picks_folder_on_desktop(self, tmp_path, monkeypatch):
+        from sweep_helpers import mock_page
+
+        from UI.screens.settings.data import DataDiagnostics
+
+        db_path = _make_db(tmp_path)
+        cm = MagicMock()
+        cm.storage.db_path = db_path
+        picked = tmp_path / "picked"
+        picked.mkdir()
+        section = DataDiagnostics(
+            config=_config(tmp_path), collection_manager=cm, page=mock_page()
+        )
+        monkeypatch.setattr(
+            section._file_picker,
+            "get_directory_path",
+            AsyncMock(return_value=str(picked)),
+        )
+
+        await section._export_db_pick_location()
+
+        files = [p.name for p in picked.iterdir()]
+        assert any(f.startswith("unscreen_data_") and f.endswith(".db") for f in files)
+
+    async def test_export_db_android_uses_save_file(self, tmp_path, monkeypatch):
+        from sweep_helpers import mock_page
+
+        from UI.screens.settings.data import DataDiagnostics
+
+        db_path = _make_db(tmp_path)
+        cm = MagicMock()
+        cm.storage.db_path = db_path
+        section = DataDiagnostics(
+            config=_config(tmp_path), collection_manager=cm, page=mock_page()
+        )
+        save_file = AsyncMock(return_value="/storage/emulated/0/Download/out.db")
+        monkeypatch.setattr(section._file_picker, "save_file", save_file)
+        monkeypatch.setattr("UI.screens.settings.data.is_android", lambda: True)
+
+        await section._export_db_pick_location()
+
+        assert save_file.call_count == 1
+        kwargs = save_file.call_args.kwargs
+        assert kwargs["file_name"].startswith("unscreen_data_")
+        assert kwargs["file_name"].endswith(".db")
+        assert kwargs["src_bytes"].startswith(b"SQLite format 3\x00")
+
+    async def test_export_db_cancelled_picker_writes_nothing(self, tmp_path, monkeypatch):
+        from sweep_helpers import mock_page
+
+        from UI.screens.settings.data import DataDiagnostics
+
+        db_path = _make_db(tmp_path)
+        cm = MagicMock()
+        cm.storage.db_path = db_path
+        section = DataDiagnostics(
+            config=_config(tmp_path), collection_manager=cm, page=mock_page()
+        )
+        monkeypatch.setattr(
+            section._file_picker,
+            "get_directory_path",
+            AsyncMock(return_value=None),
+        )
+
+        await section._export_db_pick_location()
+        assert not [
+            p
+            for p in tmp_path.iterdir()
+            if p.name.startswith("unscreen_data_") and p.name.endswith(".db")
+        ]
 
     def test_clear_logs_calls_cleanup(self, tmp_path, monkeypatch):
         from UI.screens.settings.data import DataDiagnostics
