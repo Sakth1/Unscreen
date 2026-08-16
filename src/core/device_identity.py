@@ -1,10 +1,13 @@
 import json
+import logging
 import os
 import uuid
 from functools import lru_cache
 
 from utils.paths import get_data_dir
 from utils.win32 import get_winreg
+
+logger = logging.getLogger(__name__)
 
 
 def _machine_guid() -> str | None:
@@ -20,6 +23,7 @@ def _machine_guid() -> str | None:
         winreg.CloseKey(key)
         return guid.strip()
     except Exception:
+        logger.debug("MachineGuid unavailable, falling back to device file")
         return None
 
 
@@ -34,7 +38,7 @@ def _file_device_id() -> str:
                 data = json.load(f)
             return data["device_id"]
         except Exception:
-            pass
+            logger.warning("device.json unreadable, generating a new device id")
 
     new_id = str(uuid.uuid4())
     try:
@@ -47,8 +51,7 @@ def _file_device_id() -> str:
                 f,
             )
     except Exception:
-        pass
-    return new_id
+        logger.warning("Failed to persist device.json; device id is volatile")
 
 
 @lru_cache(maxsize=1)

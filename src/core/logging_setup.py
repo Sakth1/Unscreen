@@ -9,7 +9,23 @@ LOG_FILE = "app.log"
 MAX_BYTES = 5 * 1024 * 1024
 BACKUP_COUNT = 3
 
+FLET_LOGGERS = ("flet", "flet_object_patch", "flet_components")
+
 _formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
+
+def _attach_flet_loggers(handler: logging.Handler) -> None:
+    """Route flet's internal loggers into the file handler.
+
+    Their level stays NOTSET so the effective level follows the root
+    logger (apply_root_level), and propagate is disabled to avoid
+    duplicate lines via the root handler.
+    """
+    for name in FLET_LOGGERS:
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.NOTSET)
+        logger.propagate = False
+        logger.addHandler(handler)
 
 
 def setup_file_logging() -> str | None:
@@ -31,6 +47,7 @@ def setup_file_logging() -> str | None:
         handler.setLevel(logging.INFO)
         handler.setFormatter(_formatter)
         logging.getLogger().addHandler(handler)
+        _attach_flet_loggers(handler)
         logging.getLogger().info("File logging initialized: %s", log_path)
         return log_path
     except OSError as e:
@@ -62,6 +79,11 @@ def clear_logs() -> None:
     log_dir = os.path.join(get_data_dir(), LOG_DIR)
     if not os.path.isdir(log_dir):
         return
+    for name in FLET_LOGGERS:
+        logger = logging.getLogger(name)
+        for handler in logger.handlers[:]:
+            logger.removeHandler(handler)
+            handler.close()
     for handler in logging.getLogger().handlers[:]:
         if isinstance(handler, RotatingFileHandler):
             logging.getLogger().removeHandler(handler)
