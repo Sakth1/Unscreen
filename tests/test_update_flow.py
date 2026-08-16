@@ -1,5 +1,6 @@
 """Tests for the update flow orchestration (watchdog, updater)."""
 
+import os
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -47,6 +48,19 @@ def test_write_watchdog_escapes_embedded_quotes(tmp_path):
     path = write_relaunch_watchdog(9, r'C:\x\we"ird.exe', tmp_path)
     text = path.read_bytes().decode("ascii")
     assert 'we^"ird.exe' in text
+
+
+def test_write_watchdog_waits_for_old_app_pid(tmp_path):
+    path = write_relaunch_watchdog(4242, r"C:\app\unscreen.exe", tmp_path, old_pid=777)
+    text = path.read_bytes().decode("ascii")
+    assert 'set "TARGETPID2=777"' in text
+    assert text.index("TARGETPID2") < text.index(":launch")
+
+
+def test_write_watchdog_defaults_old_pid_to_current_process(tmp_path):
+    path = write_relaunch_watchdog(4242, r"C:\app\unscreen.exe", tmp_path)
+    text = path.read_bytes().decode("ascii")
+    assert f'set "TARGETPID2={os.getpid()}"' in text
 
 
 def test_spawn_watchdog_hides_window(tmp_path):

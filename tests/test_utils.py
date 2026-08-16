@@ -132,15 +132,31 @@ class TestInstanceMutex:
         from utils.win32 import acquire_instance_mutex
 
         first = acquire_instance_mutex("UnscreenTestMutex_1")
-        second = acquire_instance_mutex("UnscreenTestMutex_1")
         try:
             assert first
-            assert second
         finally:
             if first:
                 ctypes.windll.kernel32.CloseHandle(first)
-            if second:
-                ctypes.windll.kernel32.CloseHandle(second)
+
+    def test_second_acquire_detects_another_owner(self):
+        import ctypes
+        import sys
+
+        import pytest
+
+        if sys.platform != "win32":
+            pytest.skip("Windows named mutex is not available here")
+
+        from utils.win32 import acquire_instance_mutex
+
+        first = acquire_instance_mutex("UnscreenTestMutex_2")
+        second = acquire_instance_mutex("UnscreenTestMutex_2")
+        try:
+            assert first
+            assert second is None
+        finally:
+            if first:
+                ctypes.windll.kernel32.CloseHandle(first)
 
 
 class TestPlatform:

@@ -46,31 +46,41 @@ def write_relaunch_watchdog(
     setup_pid: int,
     app_exe: str | os.PathLike[str],
     directory: str | os.PathLike[str] | None = None,
+    old_pid: int | None = None,
 ) -> Path:
-    """Write a .cmd that relaunches the app once ``setup_pid`` has exited.
+    """Write a .cmd that relaunches the app once the old processes have exited.
 
     The watchdog is spawned by the (non-elevated) app before it exits, runs
-    in the user session, polls the elevated setup process, and finally starts
-    the app again with normal privileges.
+    in the user session, polls the elevated setup process *and* the previous
+    app instance (``old_pid``, defaulting to the current process), and only
+    then starts the app again with normal privileges. Waiting for the old
+    instance matters because a freshly relaunched app must not race the
+    previous one for the single-instance mutex or the database files.
     """
     location = Path(directory) if directory else Path(tempfile.gettempdir())
     location.mkdir(parents=True, exist_ok=True)
     path = location / f"unscreen-update-watchdog-{os.getpid()}-{setup_pid}.cmd"
 
     pid = int(setup_pid)
+    previous = int(old_pid) if old_pid else os.getpid()
     app = str(Path(app_exe)).replace('"', '^"')
 
     lines = [
         "@echo off",
         "setlocal",
         f'set "TARGETPID={pid}"',
+        f'set "TARGETPID2={previous}"',
         f'set "APP={app}"',
         ":wait",
         'tasklist /fi "PID eq %TARGETPID%" 2>nul | findstr /r /c:"%TARGETPID%" >nul',
-        "if not errorlevel 1 (",
-        "  ping 127.0.0.1 -n 2 >nul",
-        "  goto :wait",
-        ")",
+        "if not errorlevel 1 goto :sleep",
+        'tasklist /fi "PID eq %TARGETPID2%" 2>nul | findstr /r /c:"%TARGETPID2%" >nul',
+        "if not errorlevel 1 goto :sleep",
+        "goto :launch",
+        ":sleep",
+        "ping 127.0.0.1 -n 2 >nul",
+        "goto :wait",
+        ":launch",
         'start "" "%APP%"',
         'del "%~f0"',
         "exit /b 0",
