@@ -202,9 +202,21 @@ def show_update_dialog(
         ],
     )
 
-    chips = [_chip(f"v{update.version}", ft.Colors.PRIMARY_CONTAINER, ft.Colors.ON_PRIMARY_CONTAINER)]
+    chips = [
+        _chip(
+            f"v{update.version}",
+            ft.Colors.PRIMARY_CONTAINER,
+            ft.Colors.ON_PRIMARY_CONTAINER,
+        )
+    ]
     if update.prerelease:
-        chips.append(_chip("Prerelease", ft.Colors.TERTIARY_CONTAINER, ft.Colors.ON_TERTIARY_CONTAINER))
+        chips.append(
+            _chip(
+                "Prerelease",
+                ft.Colors.TERTIARY_CONTAINER,
+                ft.Colors.ON_TERTIARY_CONTAINER,
+            )
+        )
     version_row = ft.Row(
         wrap=True,
         run_spacing=4,
@@ -226,7 +238,9 @@ def show_update_dialog(
     if release_date:
         meta_lines.append(f"Released {release_date}")
     meta_lines.append(f"Download size: {size_mb}")
-    meta_row = ft.Text(" · ".join(meta_lines), size=12, color=ft.Colors.ON_SURFACE_VARIANT)
+    meta_row = ft.Text(
+        " · ".join(meta_lines), size=12, color=ft.Colors.ON_SURFACE_VARIANT
+    )
 
     if notes:
         notes_control = build_notes_markdown(page, notes)
@@ -253,7 +267,9 @@ def show_update_dialog(
     )
     progress_col = _UpdateProgress()
 
-    content = ft.Column(controls=[header, details, progress_col], tight=True, spacing=12)
+    content = ft.Column(
+        controls=[header, details, progress_col], tight=True, spacing=12
+    )
     if width is not None:
         content = ft.Container(content=content, width=width)
 
@@ -451,7 +467,9 @@ def show_update_dialog(
     later_btn = ft.TextButton("Later", on_click=_later)
 
     dialog.actions = (
-        [releases_btn, later_btn, install_btn] if installable else [later_btn, releases_btn]
+        [releases_btn, later_btn, install_btn]
+        if installable
+        else [later_btn, releases_btn]
     )
     dialog.actions_alignment = ft.MainAxisAlignment.END
     page.show_dialog(dialog)

@@ -54,9 +54,7 @@ def build_notes_markdown(page: ft.Page, notes: str) -> ft.Markdown:
     code blocks pick a highlight theme matching the current theme mode.
     """
     dark = getattr(page, "theme_mode", None) == ft.ThemeMode.DARK
-    code_theme = (
-        ft.MarkdownCodeTheme.A11Y_DARK if dark else ft.MarkdownCodeTheme.GITHUB
-    )
+    code_theme = ft.MarkdownCodeTheme.A11Y_DARK if dark else ft.MarkdownCodeTheme.GITHUB
     return ft.Markdown(
         value=notes,
         selectable=True,
@@ -64,9 +62,7 @@ def build_notes_markdown(page: ft.Page, notes: str) -> ft.Markdown:
         code_theme=code_theme,
         auto_follow_links=False,
         md_style_sheet=ft.MarkdownStyleSheet(
-            p_text_style=ft.TextStyle(
-                size=12, color=ft.Colors.ON_SURFACE, height=1.4
-            ),
+            p_text_style=ft.TextStyle(size=12, color=ft.Colors.ON_SURFACE, height=1.4),
             h1_text_style=ft.TextStyle(
                 size=15, weight=ft.FontWeight.BOLD, color=ft.Colors.ON_SURFACE
             ),
