@@ -125,6 +125,23 @@ class _UpdateProgress(ft.Column):
         safe_update(self)
 
 
+def _finish_activity_after_install(page: ft.Page) -> None:
+    """Close the app after handing off to the Android installer.
+
+    The flet template manifest uses ``singleTop`` with an empty task
+    affinity, so a later launch (installer "Open", launcher) can create a
+    second task — showing as duplicate instances in recents. Destroying the
+    window finishes the current activity, so the stale task leaves recents
+    and the next open is a single fresh task.
+    """
+
+    async def _close() -> None:
+        await asyncio.sleep(0.8)
+        await page.window.destroy()
+
+    asyncio.create_task(_close())
+
+
 def _chip(text: str, bgcolor: str, fgcolor: str) -> ft.Container:
     return ft.Container(
         content=ft.Text(text, size=11, weight=ft.FontWeight.W_500, color=fgcolor),
@@ -446,6 +463,7 @@ def show_update_dialog(
             toast("Allow app installs from Android settings, then try again")
         elif outcome.result == ApplyResult.APPLIED:
             toast("Installer opened — follow the on-screen instructions")
+            _finish_activity_after_install(page)
         else:
             toast("The installer could not be started")
 
