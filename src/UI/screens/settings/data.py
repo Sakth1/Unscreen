@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from typing import Any, Callable, Optional
@@ -192,13 +193,18 @@ class DataDiagnostics(ft.Container):
             self._toast("Collection services unavailable")
             return
         if self._page is not None:
-            self._page.overlay.append(self._file_picker)
             self._page.run_task(self._export_db_pick_location)
             return
         self._export_db_direct()
 
     async def _export_db_pick_location(self) -> None:
-        snapshot = self._db_snapshot()
+        # The FilePicker is a Service control: attaching it to the overlay
+        # makes the client render it as an ErrorControl ("Unknown control:
+        # FilePicker" - a red block). Services self-register with the page's
+        # service registry, so save_file/get_directory_path work without any
+        # attach. The VACUUM-INTO snapshot runs off the event loop so a large
+        # database cannot freeze the UI.
+        snapshot = await asyncio.to_thread(self._db_snapshot)
         if snapshot is None:
             return
         filename, data = snapshot
