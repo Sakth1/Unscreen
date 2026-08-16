@@ -62,9 +62,7 @@ class _EventBridge:
             if url_visit:
                 self._write_url_visit(watcher, url_visit, ts, event_id)
             if self._platform == "windows":
-                self._produce_app_session(
-                    prev_event_id, event_id, ts, app_key, payload
-                )
+                self._produce_app_session(prev_event_id, event_id, ts, app_key, payload)
             return
 
         if event_type == "idle_transition":

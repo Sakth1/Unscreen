@@ -249,9 +249,7 @@ class TestEventBridge:
                 timestamp=t0,
             )
         )
-        assert all(
-            v["session_id"] is None for v in in_memory_db.get_url_visits()
-        )
+        assert all(v["session_id"] is None for v in in_memory_db.get_url_visits())
         bridge(
             Tick(
                 watcher="foreground",
@@ -322,7 +320,9 @@ class TestEventBridge:
         )
         blocks = in_memory_db.get_status_sessions()
         assert len(blocks) == 2
-        assert blocks[0]["end_ts"] == int((t0 + timedelta(seconds=5)).timestamp() * 1000)
+        assert blocks[0]["end_ts"] == int(
+            (t0 + timedelta(seconds=5)).timestamp() * 1000
+        )
         assert blocks[1]["end_ts"] is None
 
     def test_android_produces_no_status_sessions(self, in_memory_db):

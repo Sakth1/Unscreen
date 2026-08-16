@@ -406,6 +406,7 @@ class TestStatusSessions:
         assert results[0]["event_id"] == 1
         assert results[0]["end_ts"] is None
         assert results[0]["duration_s"] is None
+
     def test_close_status_sets_duration(self, in_memory_db):
         self._open(in_memory_db, start_ts=1000)
         assert in_memory_db.close_status_session(event_id=1, end_ts=1300) is not None

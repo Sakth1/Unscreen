@@ -52,6 +52,7 @@ def _file_device_id() -> str:
             )
     except Exception:
         logger.warning("Failed to persist device.json; device id is volatile")
+    return new_id
 
 
 @lru_cache(maxsize=1)
