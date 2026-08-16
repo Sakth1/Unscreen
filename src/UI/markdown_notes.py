@@ -16,6 +16,10 @@ _MAX_NOTES_CHARS = 6000
 
 _IMAGE_PATTERN = re.compile(r"!\[([^\]]*)\]\([^)]*\)")
 _HTML_TAG_PATTERN = re.compile(r"<[^>]+>")
+_FENCED_BLOCK_PATTERN = re.compile(r"```[^\n]*\n.*?```", re.DOTALL)
+_TILDE_BLOCK_PATTERN = re.compile(r"~~~[^\n]*\n.*?~~~", re.DOTALL)
+_STRAY_FENCE_PATTERN = re.compile(r"^```[^\n]*\n?", re.MULTILINE)
+_STRAY_TILDE_PATTERN = re.compile(r"^~~~[^\n]*\n?", re.MULTILINE)
 
 
 def sanitize_release_notes(markdown: str, max_chars: int = _MAX_NOTES_CHARS) -> str:
@@ -24,11 +28,18 @@ def sanitize_release_notes(markdown: str, max_chars: int = _MAX_NOTES_CHARS) -> 
     - Image syntax (``![alt](url)``) is dropped, keeping the alt text.
     - Raw HTML tags are removed (GitHub bodies may carry ``<details>``,
       ``<img>``, ``<br>`` and friends that flet cannot render).
+    - Fenced code blocks (backtick or tilde) are removed entirely: flet's
+      markdown renders them with a ``SizedBox(width: 10000)`` that pushes
+      the dialog content off-screen horizontally.
     - Runaway blank lines are collapsed.
     - The result is capped at ``max_chars`` with a trailing ellipsis.
     """
     text = _IMAGE_PATTERN.sub(r"\1", markdown or "")
     text = _HTML_TAG_PATTERN.sub("", text)
+    text = _FENCED_BLOCK_PATTERN.sub("", text)
+    text = _TILDE_BLOCK_PATTERN.sub("", text)
+    text = _STRAY_FENCE_PATTERN.sub("", text)
+    text = _STRAY_TILDE_PATTERN.sub("", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = text.strip()

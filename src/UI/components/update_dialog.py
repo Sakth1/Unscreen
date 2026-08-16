@@ -42,22 +42,6 @@ class _DownloadCanceled(Exception):
     pass
 
 
-def _notes_height(page_height: float, form_factor: ScreenFormFactor) -> float:
-    """Release-notes box height adapted to the viewport and form factor.
-
-    Phones and tablets in portrait get a tall box relative to the screen;
-    landscape and desktop get a bounded window so the dialog never
-    dominates the viewport.
-    """
-    match form_factor:
-        case ScreenFormFactor.MOBILE:
-            return min(340.0, max(140.0, page_height * 0.35))
-        case ScreenFormFactor.TABLET_PORTRAIT:
-            return min(420.0, max(180.0, page_height * 0.40))
-        case _:
-            return min(320.0, max(200.0, page_height * 0.30))
-
-
 def _dialog_width(form_factor: ScreenFormFactor) -> Optional[float]:
     """Content width; ``None`` lets the platform size the dialog (mobile)."""
     if form_factor in (ScreenFormFactor.TABLET_LANDSCAPE, ScreenFormFactor.DESKTOP):
@@ -184,8 +168,6 @@ def show_update_dialog(
     form_factor = (
         layout.screen_form_factor if layout is not None else ScreenFormFactor.DESKTOP
     )
-    page_height = float(getattr(page, "height", 0) or 800)
-    notes_height = _notes_height(page_height, form_factor)
     width = _dialog_width(form_factor)
 
     header = ft.Row(
@@ -268,8 +250,6 @@ def show_update_dialog(
     notes_box = ft.Container(
         content=ft.Column(
             controls=[notes_control],
-            height=notes_height,
-            scroll=ft.ScrollMode.AUTO,
             spacing=0,
         ),
         padding=10,

@@ -26,39 +26,6 @@ def _update(**overrides) -> UpdateInfo:
     return UpdateInfo(**fields)
 
 
-class TestNotesHeight:
-    def _height(self, page_height: float, form_factor) -> float:
-        from UI.components.update_dialog import _notes_height
-
-        return _notes_height(page_height, form_factor)
-
-    def test_mobile_scales_with_screen(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(800, ScreenFormFactor.MOBILE) == 280.0
-
-    def test_mobile_floor_on_tiny_screens(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(300, ScreenFormFactor.MOBILE) == 140.0
-
-    def test_tablet_portrait_is_taller(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(900, ScreenFormFactor.TABLET_PORTRAIT) == 360.0
-
-    def test_desktop_is_bounded(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(2000, ScreenFormFactor.DESKTOP) == 320.0
-        assert self._height(600, ScreenFormFactor.DESKTOP) == 200.0
-
-    def test_tablet_landscape_matches_desktop(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(800, ScreenFormFactor.TABLET_LANDSCAPE) == 240.0
-
-
 class TestDialogWidth:
     def test_wide_form_factors_get_constrained_width(self):
         from UI.components.update_dialog import _dialog_width
