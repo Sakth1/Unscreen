@@ -43,6 +43,35 @@ class TestSanitizeReleaseNotes:
         assert "**Full Changelog**" in cleaned
         assert "* Fix by @Sakth1" in cleaned
 
+    def test_strips_fenced_code_blocks(self):
+        md = "Intro\n\n```sh\npip install unscreen\n```\n\nOutro"
+        cleaned = sanitize_release_notes(md)
+        assert "pip install" not in cleaned
+        assert "```" not in cleaned
+        assert cleaned == "Intro\n\nOutro"
+
+    def test_strips_tilde_fenced_code_blocks(self):
+        md = "Before\n~~~python\nprint('hi')\n~~~\nAfter"
+        cleaned = sanitize_release_notes(md)
+        assert "print('hi')" not in cleaned
+        assert "~~~" not in cleaned
+        assert "Before" in cleaned
+        assert "After" in cleaned
+
+    def test_strips_unclosed_fence_keeps_content(self):
+        md = "Before\n```sh\ndangling command"
+        cleaned = sanitize_release_notes(md)
+        assert "```" not in cleaned
+        assert "dangling command" in cleaned
+
+    def test_strips_stray_fence_markers(self):
+        md = "One\n```\nTwo"
+        assert sanitize_release_notes(md) == "One\nTwo"
+
+    def test_keeps_inline_code(self):
+        md = "Run `unscreen --version` to check."
+        assert sanitize_release_notes(md) == "Run `unscreen --version` to check."
+
     def test_empty_input(self):
         assert sanitize_release_notes("") == ""
         assert sanitize_release_notes(None) == ""

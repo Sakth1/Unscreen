@@ -216,9 +216,7 @@ class Storage:
     def _wipe_and_recreate(self) -> None:
         self._conn.close()
         for suffix in ("", "-wal", "-shm"):
-            path = f"{self._path}{suffix}"
-            if os.path.exists(path):
-                os.remove(path)
+            self._remove_or_quarantine(f"{self._path}{suffix}")
         if self._platform == "android":
             try:
                 from core.storage.android_durable import AndroidDurableBackup
@@ -231,6 +229,52 @@ class Storage:
                 )
         self._conn = self._connect()
         self._create_schema()
+
+    def _remove_or_quarantine(self, path: str) -> None:
+        """Delete *path*, quarantining it when deletion keeps failing.
+
+        A stale handle from a previous instance (or a brief antivirus scan)
+        can block ``os.remove``; the file is then renamed aside instead of
+        aborting the wipe. If even the rename fails the wipe raises a
+        human-readable :class:`RuntimeError` instead of leaking a cryptic
+        ``PermissionError``.
+        """
+        if not os.path.exists(path):
+            return
+        try:
+            for attempt in range(3):
+                try:
+                    os.remove(path)
+                    return
+                except OSError:
+                    if attempt >= 2:
+                        raise
+                    time.sleep(0.2)
+        except OSError:
+            quarantined = self._quarantine_file(path)
+            if quarantined is not None:
+                logger.warning(
+                    "Quarantined locked database file %s -> %s", path, quarantined
+                )
+                return
+            raise RuntimeError(
+                f"Database wipe failed: could not remove or quarantine {path}. "
+                "Close every other Unscreen instance and try again."
+            ) from None
+
+    def _quarantine_file(self, path: str) -> str | None:
+        """Rename *path* aside so the schema wipe can proceed."""
+        base = f"{path}.quarantined-{int(time.time())}"
+        for attempt in range(10):
+            target = base if attempt == 0 else f"{base}-{attempt}"
+            if os.path.exists(target):
+                continue
+            try:
+                os.rename(path, target)
+            except OSError:
+                return None
+            return target
+        return None
 
     def _register_device(self) -> None:
         now = datetime.now(timezone.utc).isoformat()

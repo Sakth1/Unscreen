@@ -42,22 +42,6 @@ class _DownloadCanceled(Exception):
     pass
 
 
-def _notes_height(page_height: float, form_factor: ScreenFormFactor) -> float:
-    """Release-notes box height adapted to the viewport and form factor.
-
-    Phones and tablets in portrait get a tall box relative to the screen;
-    landscape and desktop get a bounded window so the dialog never
-    dominates the viewport.
-    """
-    match form_factor:
-        case ScreenFormFactor.MOBILE:
-            return min(340.0, max(140.0, page_height * 0.35))
-        case ScreenFormFactor.TABLET_PORTRAIT:
-            return min(420.0, max(180.0, page_height * 0.40))
-        case _:
-            return min(320.0, max(200.0, page_height * 0.30))
-
-
 def _dialog_width(form_factor: ScreenFormFactor) -> Optional[float]:
     """Content width; ``None`` lets the platform size the dialog (mobile)."""
     if form_factor in (ScreenFormFactor.TABLET_LANDSCAPE, ScreenFormFactor.DESKTOP):
@@ -125,6 +109,23 @@ class _UpdateProgress(ft.Column):
         safe_update(self)
 
 
+def _finish_activity_after_install(page: ft.Page) -> None:
+    """Close the app after handing off to the Android installer.
+
+    The flet template manifest uses ``singleTop`` with an empty task
+    affinity, so a later launch (installer "Open", launcher) can create a
+    second task — showing as duplicate instances in recents. Destroying the
+    window finishes the current activity, so the stale task leaves recents
+    and the next open is a single fresh task.
+    """
+
+    async def _close() -> None:
+        await asyncio.sleep(0.8)
+        await page.window.destroy()
+
+    asyncio.create_task(_close())
+
+
 def _chip(text: str, bgcolor: str, fgcolor: str) -> ft.Container:
     return ft.Container(
         content=ft.Text(text, size=11, weight=ft.FontWeight.W_500, color=fgcolor),
@@ -167,8 +168,6 @@ def show_update_dialog(
     form_factor = (
         layout.screen_form_factor if layout is not None else ScreenFormFactor.DESKTOP
     )
-    page_height = float(getattr(page, "height", 0) or 800)
-    notes_height = _notes_height(page_height, form_factor)
     width = _dialog_width(form_factor)
 
     header = ft.Row(
@@ -251,8 +250,6 @@ def show_update_dialog(
     notes_box = ft.Container(
         content=ft.Column(
             controls=[notes_control],
-            height=notes_height,
-            scroll=ft.ScrollMode.AUTO,
             spacing=0,
         ),
         padding=10,
@@ -446,6 +443,7 @@ def show_update_dialog(
             toast("Allow app installs from Android settings, then try again")
         elif outcome.result == ApplyResult.APPLIED:
             toast("Installer opened — follow the on-screen instructions")
+            _finish_activity_after_install(page)
         else:
             toast("The installer could not be started")
 

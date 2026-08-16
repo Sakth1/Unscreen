@@ -30,6 +30,16 @@ from utils.platform import OSType
 _EVENT_TIMEOUT_S = 5.0
 
 
+def _walk_controls(control):
+    """Yield a control and its descendants (controls lists + container content)."""
+    yield control
+    for child in getattr(control, "controls", []) or []:
+        yield from _walk_controls(child)
+    content = getattr(control, "content", None)
+    if isinstance(content, ft.Control):
+        yield from _walk_controls(content)
+
+
 class _FakeWatcher:
     """Real watcher protocol, fake payloads — every tick emits real data."""
 
@@ -910,3 +920,56 @@ class TestAppHeadlessBoot:
         page = mock_page()
         show_permission_dialog(page)
         page.show_dialog.assert_called_once()
+
+    def test_packaged_second_instance_refuses_to_start(self):
+        import pytest
+
+        from app import App
+
+        with (
+            patch("app.detect_os", return_value=OSType.WINDOWS),
+            patch("app.is_packaged", return_value=True),
+            patch("app.acquire_instance_mutex", return_value=None),
+            pytest.raises(RuntimeError, match="already running"),
+        ):
+            App(self._page(1280, 800))
+
+    def test_unpackaged_instance_ignores_mutex_contention(self):
+        from app import App
+
+        with (
+            patch("app.detect_os", return_value=OSType.WINDOWS),
+            patch("app.is_packaged", return_value=False),
+            patch("app.acquire_instance_mutex", return_value=None),
+        ):
+            app = App(self._page(1280, 800))
+        assert app.page.title == "Unscreen"
+
+    def test_startup_error_renders_inline_instead_of_blank_window(self):
+        from app import _render_startup_error
+
+        page = mock_page()
+        _render_startup_error(page, RuntimeError("another instance"))
+
+        page.clean.assert_called_once()
+        page.update.assert_called_once()
+        root = page.add.call_args.args[0]
+        texts = [c.value for c in _walk_controls(root) if isinstance(c, ft.Text)]
+        assert any("could not start" in (t or "") for t in texts)
+        assert any("another instance" in (t or "") for t in texts)
+
+        buttons = [c for c in _walk_controls(root) if isinstance(c, ft.FilledButton)]
+        assert len(buttons) == 1
+        buttons[0].on_click(None)
+        page.run_task.assert_called_once_with(page.window.destroy)
+
+    def test_entrypoint_converts_startup_crash_into_error_screen(self):
+        import asyncio
+
+        from app import entrypoint
+
+        page = mock_page()
+        with patch("app.App", side_effect=RuntimeError("boom")):
+            asyncio.run(entrypoint(page))
+        page.clean.assert_called_once()
+        page.update.assert_called_once()

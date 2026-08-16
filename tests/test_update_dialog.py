@@ -26,39 +26,6 @@ def _update(**overrides) -> UpdateInfo:
     return UpdateInfo(**fields)
 
 
-class TestNotesHeight:
-    def _height(self, page_height: float, form_factor) -> float:
-        from UI.components.update_dialog import _notes_height
-
-        return _notes_height(page_height, form_factor)
-
-    def test_mobile_scales_with_screen(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(800, ScreenFormFactor.MOBILE) == 280.0
-
-    def test_mobile_floor_on_tiny_screens(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(300, ScreenFormFactor.MOBILE) == 140.0
-
-    def test_tablet_portrait_is_taller(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(900, ScreenFormFactor.TABLET_PORTRAIT) == 360.0
-
-    def test_desktop_is_bounded(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(2000, ScreenFormFactor.DESKTOP) == 320.0
-        assert self._height(600, ScreenFormFactor.DESKTOP) == 200.0
-
-    def test_tablet_landscape_matches_desktop(self):
-        from UI.layout.models import ScreenFormFactor
-
-        assert self._height(800, ScreenFormFactor.TABLET_LANDSCAPE) == 240.0
-
-
 class TestDialogWidth:
     def test_wide_form_factors_get_constrained_width(self):
         from UI.components.update_dialog import _dialog_width
@@ -181,6 +148,97 @@ class TestShowUpdateDialog:
         install.on_click(None)
         assert get_app_state().update_status is UpdateStatus.DOWNLOADING
         page.run_task.assert_called_once()
+
+
+class TestAndroidInstallFinishesActivity:
+    def test_applied_install_destroys_window(self, monkeypatch, tmp_path):
+        import asyncio
+        import unittest.mock
+        from types import SimpleNamespace
+
+        from core.update_checker import ApplyResult
+
+        reset_app_state()
+        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: True)
+        monkeypatch.setattr("UI.components.update_dialog.is_android", lambda: True)
+        apk = tmp_path / "app.apk"
+        apk.write_bytes(b"apk")
+
+        class FakeUpdater:
+            def apply_update(self, update, apk_path, relaunch=False):
+                assert relaunch is False
+                return SimpleNamespace(result=ApplyResult.APPLIED)
+
+        class FakeChecker:
+            def download(self, update, dest, on_progress):
+                return str(apk)
+
+        monkeypatch.setattr("UI.components.update_dialog.Updater", FakeUpdater)
+        monkeypatch.setattr("UI.components.update_dialog.UpdateChecker", FakeChecker)
+
+        page = mock_page()
+        page.window.destroy = unittest.mock.AsyncMock()
+        page.height = 800
+        from UI.components.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        dialog = page.show_dialog.call_args.args[0]
+        install = next(b for b in dialog.actions if b.content == "Download & install")
+        install.on_click(None)
+
+        run_install = page.run_task.call_args.args[0]
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(run_install())
+            for task in [t for t in asyncio.all_tasks(loop)]:
+                loop.run_until_complete(task)
+        finally:
+            loop.close()
+
+        page.window.destroy.assert_awaited_once()
+
+    def test_manual_required_keeps_app_open(self, monkeypatch, tmp_path):
+        import asyncio
+        from types import SimpleNamespace
+
+        from core.update_checker import ApplyResult
+
+        reset_app_state()
+        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: True)
+        monkeypatch.setattr("UI.components.update_dialog.is_android", lambda: True)
+        apk = tmp_path / "app.apk"
+        apk.write_bytes(b"apk")
+
+        class FakeUpdater:
+            def apply_update(self, update, apk_path, relaunch=False):
+                return SimpleNamespace(result=ApplyResult.MANUAL_REQUIRED)
+
+        class FakeChecker:
+            def download(self, update, dest, on_progress):
+                return str(apk)
+
+        monkeypatch.setattr("UI.components.update_dialog.Updater", FakeUpdater)
+        monkeypatch.setattr("UI.components.update_dialog.UpdateChecker", FakeChecker)
+
+        page = mock_page()
+        page.height = 800
+        from UI.components.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        dialog = page.show_dialog.call_args.args[0]
+        install = next(b for b in dialog.actions if b.content == "Download & install")
+        install.on_click(None)
+
+        run_install = page.run_task.call_args.args[0]
+        loop = asyncio.new_event_loop()
+        try:
+            loop.run_until_complete(run_install())
+            for task in [t for t in asyncio.all_tasks(loop)]:
+                loop.run_until_complete(task)
+        finally:
+            loop.close()
+
+        page.window.destroy.assert_not_called()
 
 
 def _collect(control, cls):

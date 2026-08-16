@@ -480,6 +480,20 @@ class TestDataDiagnosticsSection:
         section._export_db(None)
         assert list(tmp_path.iterdir()) == []
 
+    def test_export_db_never_attaches_picker_to_overlay(self, tmp_path):
+        from sweep_helpers import mock_page
+
+        from UI.screens.settings.data import DataDiagnostics
+
+        cm = MagicMock()
+        cm.storage.db_path = str(tmp_path / "data.db")
+        section = DataDiagnostics(
+            config=_config(tmp_path), collection_manager=cm, page=mock_page()
+        )
+        section._export_db(None)
+        section._page.run_task.assert_called_once_with(section._export_db_pick_location)
+        section._page.overlay.append.assert_not_called()
+
     def test_export_db_direct_fallback_writes_file(self, tmp_path, monkeypatch):
         from UI.screens.settings.data import DataDiagnostics
 

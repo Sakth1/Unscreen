@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import datetime, timezone
 
@@ -695,6 +696,48 @@ class TestSchemaMigration:
         assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
         assert deleted == [db]
         storage.close()
+
+    def test_wipe_quarantines_locked_db_file(self, tmp_path, monkeypatch):
+        db = str(tmp_path / "test.db")
+        _seed_version(db, 5)
+        real_remove = os.remove
+
+        def locked_remove(path):
+            if path == db:
+                raise PermissionError(13, "Access is denied", path)
+            real_remove(path)
+
+        monkeypatch.setattr(os, "remove", locked_remove)
+
+        storage = Storage(db_path=db)
+        try:
+            assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+            _assert_schema_v8(storage._conn)
+        finally:
+            storage.close()
+
+        quarantined = [
+            p for p in tmp_path.iterdir() if p.name.startswith("test.db.quarantined")
+        ]
+        assert len(quarantined) == 1, "locked database must be renamed aside"
+
+    def test_wipe_raises_clear_error_when_everything_is_locked(
+        self, tmp_path, monkeypatch
+    ):
+        db = str(tmp_path / "test.db")
+        _seed_version(db, 5)
+
+        def locked_remove(_path):
+            raise PermissionError(13, "Access is denied")
+
+        def locked_rename(_src, _dst):
+            raise PermissionError(13, "Access is denied")
+
+        monkeypatch.setattr(os, "remove", locked_remove)
+        monkeypatch.setattr(os, "rename", locked_rename)
+
+        with pytest.raises(RuntimeError, match="(?i)database wipe failed"):
+            Storage(db_path=db)
 
     def test_schema_integrity_after_migration(self, tmp_path):
         db = str(tmp_path / "test.db")

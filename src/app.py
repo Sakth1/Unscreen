@@ -77,9 +77,18 @@ def _theme_mode_from_config(mode: str) -> ft.ThemeMode:
 class App:
     def __init__(self, page: ft.Page):
         # The installer (AppMutex=Unscreen_Mutex) uses this to detect and
-        # close a running app before updating it.
-        if detect_os() == OSType.WINDOWS:
-            acquire_instance_mutex("Unscreen_Mutex")
+        # close a running app before updating it. A second concurrent
+        # instance (e.g. a relaunch racing the previous process) would hit
+        # locked database files, so refuse to start instead of crashing.
+        if (
+            detect_os() == OSType.WINDOWS
+            and is_packaged()
+            and acquire_instance_mutex("Unscreen_Mutex") is None
+        ):
+            raise RuntimeError(
+                "Another instance of Unscreen is already running. "
+                "Close it and try again."
+            )
 
         self.page = page
         self.page.title = "Unscreen"
@@ -650,4 +659,54 @@ class App:
 
 
 async def entrypoint(page: ft.Page):
-    App(page)
+    try:
+        App(page)
+    except Exception as exc:
+        logger.exception("Fatal error during app startup")
+        _render_startup_error(page, exc)
+
+
+def _render_startup_error(page: ft.Page, exc: Exception) -> None:
+    """Surface a startup failure in the window instead of a silent blank one.
+
+    Anything raised while booting (storage wipe, schema creation, layout
+    resolution) previously left the user staring at an empty window with no
+    traceback visible anywhere. The error text and the log location are
+    rendered inline; ``logger.exception`` above already recorded the full
+    traceback.
+    """
+    log_path = get_log_path()
+    message = (
+        f"{type(exc).__name__}: {exc}\n\n"
+        f"Details were written to {log_path or 'the console'}"
+    )
+    try:
+        page.clean()
+        page.add(
+            ft.Column(
+                expand=True,
+                alignment=ft.MainAxisAlignment.CENTER,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(ft.Icons.ERROR_OUTLINE, size=56, color=ft.Colors.ERROR),
+                    ft.Text(
+                        "Unscreen could not start",
+                        weight=ft.FontWeight.BOLD,
+                        size=20,
+                    ),
+                    ft.Text(
+                        message,
+                        selectable=True,
+                        width=560,
+                        text_align=ft.TextAlign.CENTER,
+                    ),
+                    ft.FilledButton(
+                        "Close",
+                        on_click=lambda _e: page.run_task(page.window.destroy),
+                    ),
+                ],
+            )
+        )
+        page.update()
+    except Exception:
+        logger.exception("Failed to render the startup error screen")
