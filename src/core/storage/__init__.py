@@ -15,11 +15,12 @@ from utils.time_utils import utc_timestamp
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
-# Pre-v7 databases are structurally incompatible with the de-bloated schema
-# (device_id columns, REAL timestamps, no dedup identity). The app is early
-# stage, so rather than migrating we wipe and recreate fresh.
+# Pre-v8 databases are structurally incompatible with the current schema
+# (16-byte BLOB hash, sessions table without event_id, no status_sessions).
+# The app is early stage, so rather than migrating we wipe and recreate
+# fresh.
 WIPE_BELOW_VERSION = SCHEMA_VERSION
 
 
@@ -31,11 +32,19 @@ def _schema_dir() -> str:
     return os.path.join(os.path.dirname(__file__), "schemas")
 
 
-def _payload_hash(payload: dict) -> bytes:
+def _payload_hash(payload: dict) -> int:
+    """8-byte blake2b of the canonical payload JSON, as a positive INTEGER.
+
+    Halves the v7 storage cost (16-byte BLOB + index leaf). The digest is
+    deterministic across processes and platforms, which is what the dedup
+    identity needs; 64 bits of collision space is ample for dedup at
+    personal scale.
+    """
     canonical = json.dumps(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     )
-    return hashlib.blake2b(canonical.encode("utf-8"), digest_size=16).digest()
+    digest = hashlib.blake2b(canonical.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=True)
 
 
 class Storage:
@@ -391,7 +400,11 @@ class Storage:
         )
         if filters:
             sql += " WHERE " + " AND ".join(filters)
-        sql += " ORDER BY e.timestamp DESC" if desc else " ORDER BY e.timestamp ASC"
+        sql += (
+            " ORDER BY e.timestamp DESC, e.id DESC"
+            if desc
+            else " ORDER BY e.timestamp ASC, e.id ASC"
+        )
         if limit is not None:
             sql += f" LIMIT {limit}"
 
@@ -409,25 +422,42 @@ class Storage:
             for r in self._conn.execute(sql, params).fetchall()
         ]
 
-    def write_canonical_session(self, session: dict) -> int:
-        device_fk = self._resolve_device_fk(session["device_id"])
+    def open_app_session(
+        self, event_id: int, start_ts: int, app_key: str, payload: dict
+    ) -> int:
+        """Insert one open app session row owned by ``event_id`` (the
+        foreground_transition that started the block). Returns the rowid.
+        The session stays open until ``close_app_session()``."""
         self._conn.execute(
-            """INSERT INTO sessions
-               (device_fk, start_ts, end_ts, duration_s, app_key, payload, session_type)
-               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            """INSERT INTO app_sessions
+               (device_fk, event_id, start_ts, app_key, payload)
+               VALUES (?, ?, ?, ?, ?)""",
             (
-                device_fk,
-                session["start_ts"],
-                session.get("end_ts"),
-                session.get("duration_s"),
-                session["app_key"],
-                json.dumps(session["payload"]),
-                session.get("session_type", "foreground"),
+                self._device_fk,
+                event_id,
+                start_ts,
+                app_key,
+                json.dumps(payload),
             ),
         )
         return self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_canonical_sessions(
+    def close_app_session(self, event_id: int, end_ts: int) -> bool:
+        """Close the open app session owned by ``event_id`` at ``end_ts``.
+
+        Sets ``end_ts`` and ``duration_s = (end_ts - start_ts) / 1000``.
+        Returns ``True`` when a row was updated, ``False`` when the session
+        was already closed or does not exist.
+        """
+        cur = self._conn.execute(
+            """UPDATE app_sessions
+               SET end_ts = ?, duration_s = (? - start_ts) / 1000.0
+               WHERE device_fk = ? AND event_id = ? AND end_ts IS NULL""",
+            (end_ts, end_ts, self._device_fk, event_id),
+        )
+        return cur.rowcount > 0
+
+    def get_app_sessions(
         self,
         app_key: str | None = None,
         device_id: str | None = None,
@@ -456,9 +486,9 @@ class Storage:
             params.append(platform)
 
         sql = (
-            "SELECT s.id, d.device_id, d.platform, s.start_ts, s.end_ts,"
-            " s.duration_s, s.app_key, s.payload, s.session_type"
-            " FROM sessions s"
+            "SELECT s.id, d.device_id, d.platform, s.event_id, s.start_ts,"
+            " s.end_ts, s.duration_s, s.app_key, s.payload"
+            " FROM app_sessions s"
             " JOIN devices d ON d.id = s.device_fk"
         )
         if filters:
@@ -472,12 +502,102 @@ class Storage:
                 "id": r[0],
                 "device_id": r[1],
                 "platform": r[2],
-                "start_ts": r[3],
-                "end_ts": r[4],
-                "duration_s": r[5],
-                "app_key": r[6],
-                "payload": json.loads(r[7]),
-                "session_type": r[8],
+                "event_id": r[3],
+                "start_ts": r[4],
+                "end_ts": r[5],
+                "duration_s": r[6],
+                "app_key": r[7],
+                "payload": json.loads(r[8]),
+            }
+            for r in self._conn.execute(sql, params).fetchall()
+        ]
+
+    def open_status_session(
+        self, event_id: int, start_ts: int, status: str, payload: dict
+    ) -> int:
+        """Insert one open status block row owned by ``event_id`` (the
+        idle_transition that started the block). Returns the rowid. The
+        block stays open until ``close_status_session()``."""
+        self._conn.execute(
+            """INSERT INTO status_sessions
+               (device_fk, event_id, start_ts, status, payload)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                self._device_fk,
+                event_id,
+                start_ts,
+                status,
+                json.dumps(payload),
+            ),
+        )
+        return self._conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def close_status_session(self, event_id: int, end_ts: int) -> bool:
+        """Close the open status block owned by ``event_id`` at ``end_ts``.
+
+        Sets ``end_ts`` and ``duration_s = (end_ts - start_ts) / 1000``.
+        Returns ``True`` when a row was updated, ``False`` when the block
+        was already closed or does not exist.
+        """
+        cur = self._conn.execute(
+            """UPDATE status_sessions
+               SET end_ts = ?, duration_s = (? - start_ts) / 1000.0
+               WHERE device_fk = ? AND event_id = ? AND end_ts IS NULL""",
+            (end_ts, end_ts, self._device_fk, event_id),
+        )
+        return cur.rowcount > 0
+
+    def get_status_sessions(
+        self,
+        status: str | None = None,
+        device_id: str | None = None,
+        since: int | None = None,
+        until: int | None = None,
+        platform: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        filters: list[str] = []
+        params: list = []
+
+        if status:
+            filters.append("s.status = ?")
+            params.append(status)
+        if device_id:
+            filters.append("d.device_id = ?")
+            params.append(device_id)
+        if since is not None:
+            filters.append("s.start_ts >= ?")
+            params.append(since)
+        if until is not None:
+            filters.append("COALESCE(s.end_ts, s.start_ts) <= ?")
+            params.append(until)
+        if platform:
+            filters.append("d.platform = ?")
+            params.append(platform)
+
+        sql = (
+            "SELECT s.id, d.device_id, d.platform, s.event_id, s.start_ts,"
+            " s.end_ts, s.duration_s, s.status, s.payload"
+            " FROM status_sessions s"
+            " JOIN devices d ON d.id = s.device_fk"
+        )
+        if filters:
+            sql += " WHERE " + " AND ".join(filters)
+        sql += " ORDER BY s.start_ts ASC"
+        if limit is not None:
+            sql += f" LIMIT {limit}"
+
+        return [
+            {
+                "id": r[0],
+                "device_id": r[1],
+                "platform": r[2],
+                "event_id": r[3],
+                "start_ts": r[4],
+                "end_ts": r[5],
+                "duration_s": r[6],
+                "status": r[7],
+                "payload": json.loads(r[8]),
             }
             for r in self._conn.execute(sql, params).fetchall()
         ]
@@ -596,7 +716,7 @@ class Storage:
             * 1000
         )
         row = self._conn.execute(
-            "SELECT COALESCE(SUM(duration_s), 0) FROM sessions WHERE start_ts >= ? AND duration_s IS NOT NULL",
+            "SELECT COALESCE(SUM(duration_s), 0) FROM app_sessions WHERE start_ts >= ? AND duration_s IS NOT NULL",
             (today_start,),
         ).fetchone()
         return float(row[0])
@@ -652,7 +772,7 @@ class Storage:
         )
         rows = self._conn.execute(
             """SELECT app_key, SUM(duration_s) as total_s
-               FROM sessions
+               FROM app_sessions
                WHERE start_ts >= ? AND duration_s IS NOT NULL
                GROUP BY app_key
                ORDER BY total_s DESC
@@ -664,7 +784,8 @@ class Storage:
     def clear_all_data(self) -> None:
         self._conn.execute("DELETE FROM url_visits")
         self._conn.execute("DELETE FROM raw_events")
-        self._conn.execute("DELETE FROM sessions")
+        self._conn.execute("DELETE FROM app_sessions")
+        self._conn.execute("DELETE FROM status_sessions")
         self._conn.execute("DELETE FROM sync_cursors")
         for suffix in ("events_", "observations_", "sessions_"):
             legacy = f"{suffix}{self._short_id}"

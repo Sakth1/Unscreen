@@ -1,4 +1,4 @@
--- Schema v7 — de-bloated canonical event store
+-- Schema v8 — de-bloated canonical event store + write-time session production
 --
 -- Design decisions (see docs/architecture/db-query-guide.md §2):
 -- * Device identity lives ONCE in `devices` (the per-install unique UUID).
@@ -10,10 +10,12 @@
 --   not repeated on event rows.
 -- * `event_type` / `source` are dictionary-encoded (a handful of distinct
 --   values each) into small integer FKs.
--- * `payload_hash` (16-byte blake2b of canonical JSON payload) makes sync
---   re-imports idempotent: UNIQUE(device_fk, event_type_fk, timestamp,
---   payload_hash) admits Android's same-timestamp interval fan-out (distinct
---   payloads => distinct hashes) while rejecting identical re-imports.
+-- * `payload_hash` (8-byte blake2b of canonical payload JSON, stored as
+--   INTEGER) makes sync re-imports idempotent: UNIQUE(device_fk,
+--   event_type_fk, timestamp, payload_hash) admits Android's
+--   same-timestamp interval fan-out (distinct payloads => distinct hashes)
+--   while rejecting identical re-imports. 8 bytes halves the v7 cost (16B
+--   BLOB) with negligible collision risk for dedup at personal scale.
 -- * `sync_cursors` holds per-remote-device high-water marks for the planned
 --   sync engine.
 
@@ -45,7 +47,7 @@ CREATE TABLE IF NOT EXISTS raw_events (
     timestamp     INTEGER NOT NULL,          -- Unix epoch ms (UTC) — when the event occurred
     collected_at  INTEGER NOT NULL,          -- Unix epoch ms (UTC) — when we observed it
     payload       TEXT NOT NULL,             -- JSON payload, type-specific
-    payload_hash  BLOB NOT NULL              -- 16-byte blake2b of canonical payload JSON
+    payload_hash  INTEGER NOT NULL           -- 8-byte blake2b of canonical payload JSON
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_raw_events_identity
@@ -57,40 +59,70 @@ CREATE INDEX IF NOT EXISTS idx_raw_events_device_ts
 CREATE INDEX IF NOT EXISTS idx_raw_events_type_ts
     ON raw_events(event_type_fk, timestamp);
 
--- Schema v7 — Derived sessions (shared, not per-device)
--- Sessions are reconstructed from raw_events deterministically.
+-- Schema v8 — Derived app sessions, produced at write time (Windows)
+-- The event bridge inserts one row per foreground_transition (the row that
+-- STARTED the block, referenced by event_id) and closes it when the next
+-- transition arrives or collection stops: end_ts = next transition start,
+-- duration_s = (end_ts - start_ts) / 1000. Half-open [start_ts, end_ts).
 
-CREATE TABLE IF NOT EXISTS sessions (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    device_fk     INTEGER NOT NULL REFERENCES devices(id),
-    start_ts      INTEGER NOT NULL,          -- Unix epoch ms (UTC)
-    end_ts        INTEGER,                   -- Unix epoch ms (UTC)
-    duration_s    REAL,
-    app_key       TEXT NOT NULL,
-    payload       TEXT NOT NULL,
-    session_type  TEXT DEFAULT 'foreground'
+CREATE TABLE IF NOT EXISTS app_sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_fk  INTEGER NOT NULL REFERENCES devices(id),
+    event_id   INTEGER NOT NULL REFERENCES raw_events(id),
+    start_ts   INTEGER NOT NULL,             -- Unix epoch ms (UTC) — the owning transition's timestamp
+    end_ts     INTEGER,                      -- Unix epoch ms (UTC) — NULL while the session is open
+    duration_s REAL,                         -- (end_ts - start_ts) / 1000, NULL while open
+    app_key    TEXT NOT NULL,
+    payload    TEXT NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_sessions_identity
-    ON sessions(device_fk, app_key, start_ts);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_app_sessions_identity
+    ON app_sessions(device_fk, event_id);
 
-CREATE INDEX IF NOT EXISTS idx_sessions_device_app
-    ON sessions(device_fk, app_key, start_ts);
+CREATE INDEX IF NOT EXISTS idx_app_sessions_device_app
+    ON app_sessions(device_fk, app_key, start_ts);
 
-CREATE INDEX IF NOT EXISTS idx_sessions_ts
-    ON sessions(device_fk, start_ts);
+CREATE INDEX IF NOT EXISTS idx_app_sessions_ts
+    ON app_sessions(device_fk, start_ts);
+
+-- Schema v8 — Status blocks (Windows idle state machine)
+-- One row per idle_transition event (event_id = the owning event). The
+-- bridge inserts the row when a status entry is written and closes it on
+-- the next entry or on collection stop: end_ts = next entry's start,
+-- duration_s = (end_ts - start_ts) / 1000. Every status is recorded,
+-- including 'active' — absence of a row never means anything.
+
+CREATE TABLE IF NOT EXISTS status_sessions (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_fk  INTEGER NOT NULL REFERENCES devices(id),
+    event_id   INTEGER NOT NULL REFERENCES raw_events(id),
+    start_ts   INTEGER NOT NULL,             -- Unix epoch ms (UTC) — the owning event's timestamp
+    end_ts     INTEGER,                      -- Unix epoch ms (UTC) — NULL while the block is open
+    duration_s REAL,                         -- (end_ts - start_ts) / 1000, NULL while open
+    status     TEXT NOT NULL,                -- 'active' | 'idle' | 'away'
+    payload    TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_status_sessions_identity
+    ON status_sessions(device_fk, event_id);
+
+CREATE INDEX IF NOT EXISTS idx_status_sessions_ts
+    ON status_sessions(device_fk, start_ts);
+
+CREATE INDEX IF NOT EXISTS idx_status_sessions_status
+    ON status_sessions(device_fk, status, start_ts);
 
 -- Schema v7 — URL visit log (browser navigation events, Windows only)
 -- event_id is populated at write time by the event bridge: the
 -- foreground_transition that started the browser session owns every
 -- url_visit row written until the next app transition. session_id is
--- filled by the session reconstructor (derived data).
+-- backfilled by the bridge when the owning app session closes.
 
 CREATE TABLE IF NOT EXISTS url_visits (
     id               INTEGER PRIMARY KEY AUTOINCREMENT,
     device_fk        INTEGER NOT NULL REFERENCES devices(id),
     event_id         INTEGER NOT NULL REFERENCES raw_events(id),
-    session_id       INTEGER REFERENCES sessions(id),
+    session_id       INTEGER REFERENCES app_sessions(id),
 
     url              TEXT    NOT NULL,
     browser          TEXT,

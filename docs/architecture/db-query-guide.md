@@ -1,7 +1,7 @@
 # Querying the Unscreen Database (post-cleanup reference)
 
-Status note: written at v0.4.8 after the timeline branch was reverted. The
-`raw_events` store and the storage API are unchanged by that revert; the
+Status note: written at v0.4.8 after the timeline branch was reverted; the
+`raw_events` store and the storage API are unchanged by that revert. The
 `sessions` table has **no producer** at this version (see §6) — you will
 re-implement session reconstruction ("cleaning") yourself. This document
 tells you exactly what data is on disk, in what shape, and how to get it
@@ -10,6 +10,10 @@ exploration added (§8). Updated for **schema v7** (v0.4.10-dev): de-bloated
 event store — integer FK references, integer-millisecond timestamps,
 dictionary-encoded event types/sources, `payload_hash` dedup identity,
 `sync_cursors`. Pre-v7 databases are **wiped, not migrated** (see §9).
+Updated for **schema v8** (v0.4.10-dev): `payload_hash` is an 8-byte
+INTEGER, `sessions` → `app_sessions` (with `event_id` FK, produced at
+write time), new `status_sessions` table (Windows idle blocks, produced at
+write time), `url_visits.session_id` backfilled at session close.
 
 ---
 
@@ -46,9 +50,9 @@ wipe also **deletes** the backup so it cannot resurrect wiped data. See
 in **WAL mode** (`journal_mode=WAL`, `synchronous=NORMAL`) — you will see
 `data.db-wal` and `data.db-shm` sidecars while the app is running; querying
 the main file while the app is live is safe (WAL readers are non-blocking).
-Schema is versioned via `PRAGMA user_version` (`SCHEMA_VERSION = 7`).
+Schema is versioned via `PRAGMA user_version` (`SCHEMA_VERSION = 8`).
 
-## 2. Schema (7 live tables + registry)
+## 2. Schema (8 live tables + registry)
 
 ### `devices` — device registry
 ```sql
@@ -79,41 +83,64 @@ source_fk     INTEGER NOT NULL REFERENCES sources(id),
 timestamp     INTEGER NOT NULL,   -- Unix epoch MILLISECONDS (UTC), when the event occurred
 collected_at  INTEGER NOT NULL,   -- Unix epoch ms (UTC), when we observed it
 payload       TEXT NOT NULL,      -- JSON object, type-specific
-payload_hash  BLOB NOT NULL       -- 16-byte blake2b of canonical payload JSON
+payload_hash  INTEGER NOT NULL    -- 8-byte blake2b of canonical payload JSON (v8)
 ```
 `UNIQUE(device_fk, event_type_fk, timestamp, payload_hash)` is the dedup
 identity: it admits Android's same-millisecond `app_usage_interval`
 fan-out (distinct payloads → distinct hashes) while rejecting identical
 re-imports (sync idempotence). Indexes: `(device_fk, timestamp)`,
-`(event_type_fk, timestamp)`.
+`(event_type_fk, timestamp)`. v8 halved the hash to 8 bytes (INTEGER
+instead of a 16-byte BLOB) — same semantics, negligible collision risk at
+personal scale.
 
 > **The single most important rule (ADR-0002):** `timestamp` is the event's
-> truth. **Duration is never stored on events** — it is always derived from
-> timestamps or from payload deltas. Never write a query that assumes a
-> duration column exists.
+> truth. **Duration is never authored on events** — it is always derived
+> from timestamps or from payload deltas. Never write a query that assumes
+> a duration column exists on `raw_events`.
 
-### `sessions` — derived sessions (currently an empty API surface)
+### `app_sessions` — derived app sessions (produced at write time, v8)
 ```sql
-id           INTEGER PRIMARY KEY AUTOINCREMENT,
-device_fk    INTEGER NOT NULL REFERENCES devices(id),
-start_ts     INTEGER NOT NULL,   -- Unix epoch ms (UTC)
-end_ts       INTEGER,            -- Unix epoch ms (UTC)
-duration_s   REAL,
-app_key      TEXT NOT NULL,
-payload      TEXT NOT NULL,
-session_type TEXT DEFAULT 'foreground'
+id         INTEGER PRIMARY KEY AUTOINCREMENT,
+device_fk  INTEGER NOT NULL REFERENCES devices(id),
+event_id   INTEGER NOT NULL REFERENCES raw_events(id),
+start_ts   INTEGER NOT NULL,   -- Unix epoch ms (UTC) — owning transition's timestamp
+end_ts     INTEGER,            -- Unix epoch ms (UTC), NULL while open
+duration_s REAL,               -- (end_ts - start_ts) / 1000, NULL while open
+app_key    TEXT NOT NULL,
+payload    TEXT NOT NULL
 ```
-Indexes: `(device_fk, app_key, start_ts)`, `(device_fk, start_ts)`.
-`Storage.write_canonical_session()` / `get_canonical_sessions()` exist but
-**nothing calls them at v0.4.8** — the reconstructor was part of the
-reverted branch. Rebuilding this table is your job (§6).
+One row per `foreground_transition` (the event that **started** the block,
+via `event_id`). The event bridge (Windows) opens a row on every
+foreground write and closes the previous one at the new event's timestamp;
+collection stop closes the last open session. Indexes: `(device_fk,
+app_key, start_ts)`, `(device_fk, start_ts)`, `UNIQUE(device_fk,
+event_id)`. Android has **no producer** — its `app_sessions` stays empty.
+
+### `status_sessions` — Windows idle status blocks (produced at write time, v8)
+```sql
+id         INTEGER PRIMARY KEY AUTOINCREMENT,
+device_fk  INTEGER NOT NULL REFERENCES devices(id),
+event_id   INTEGER NOT NULL REFERENCES raw_events(id),
+start_ts   INTEGER NOT NULL,   -- Unix epoch ms (UTC) — owning event's timestamp
+end_ts     INTEGER,            -- Unix epoch ms (UTC), NULL while open
+duration_s REAL,               -- (end_ts - start_ts) / 1000, NULL while open
+status     TEXT NOT NULL,      -- 'active' | 'idle' | 'away'
+payload    TEXT NOT NULL
+```
+One row per `idle_transition` entry — **every** status is recorded,
+including `active` (absence of a row never means anything). The bridge
+opens a row per entry and closes the previous one at the next entry's
+timestamp; collection stop closes the last open block. `idle_transition`
+itself is now written **only on status change** (v8, §3), so a block's
+start is the transition that entered it. Indexes: `(device_fk, start_ts)`,
+`(device_fk, status, start_ts)`, `UNIQUE(device_fk, event_id)`.
 
 ### `url_visits` — browser navigation log (Windows only, optional)
 ```sql
 id                INTEGER PRIMARY KEY AUTOINCREMENT,
 device_fk         INTEGER NOT NULL REFERENCES devices(id),
 event_id          INTEGER NOT NULL REFERENCES raw_events(id),
-session_id        INTEGER REFERENCES sessions(id),
+session_id        INTEGER REFERENCES app_sessions(id),
 url               TEXT NOT NULL,
 browser           TEXT,
 scheme TEXT, host TEXT, domain TEXT, path TEXT,
@@ -125,12 +152,13 @@ collected_at      INTEGER NOT NULL    -- Unix epoch ms (UTC)
 **`event_id` is populated at write time** by the event bridge (v7): the
 `foreground_transition` that started the browser session owns every visit
 row written until the next app transition. It is NOT NULL — no backfill
-exists (the old `backfill_url_event_id()` was removed). `session_id` is
-still filled by the future session reconstructor (derived, nullable;
-`backfill_url_session_id()` exists). `UNIQUE(device_fk, event_id, url)`
-collapses revisits of one URL within a session; `write_url_visit()`
-skips duplicates silently. Indexes on `(device_fk, seen_at)`,
-`(device_fk, domain, seen_at)`, `event_id`, `session_id`.
+exists (the old `backfill_url_event_id()` was removed). **`session_id` is
+backfilled at session close** (v8): when the bridge closes an `app_sessions`
+row, it stamps every visit whose `event_id` is the closed session's.
+`UNIQUE(device_fk, event_id, url)` collapses revisits of one URL within a
+session; `write_url_visit()` skips duplicates silently. Indexes on
+`(device_fk, seen_at)`, `(device_fk, domain, seen_at)`, `event_id`,
+`session_id`.
 
 ### `sync_cursors` — sync high-water marks (planned sync engine)
 ```sql
@@ -174,14 +202,17 @@ Written through `Storage.write_event()` via the `_EventBridge` in
   `_last_event_id[watcher]` cache; `url_visits` written while the same app
   stays foreground reuse that event id.
 
-### `idle_transition` — Windows user activity (precise)
+### `idle_transition` — Windows user activity (precise, on-change only)
 ```json
 {"status": "active" | "idle" | "away", "idle_seconds": 123.4}
 ```
-Every **5 s** (always written, even when nothing changes). `status` is
-computed from `GetLastInputInfo` vs config thresholds
+Since v8 this is written **only when the status changes** (the 5 s poll
+skips rows while the status is unchanged), so a row marks the moment a
+block starts — the next row's timestamp is implicitly this block's end.
+`status` is computed from `GetLastInputInfo` vs config thresholds
 (`afk_idle_threshold_s`, default 60 s → `idle`; `afk_away_threshold_s`,
-default 300 s → `away`). This is the ONLY idle source on Windows.
+default 300 s → `away`). This is the ONLY idle source on Windows, and the
+sole producer for `status_sessions` (§2).
 
 ### `user_presence` — Android presence approximation (boolean)
 ```json
@@ -224,18 +255,18 @@ sampling artifact, and prefer timestamp deltas for reconstruction.
 
 ## 4. "After cleaning" — what the cleanup actually consists of
 
-At v0.4.8 there is no row-level cleaning step in the codebase. What
-"clean" means in practice:
+"Clean" means the write-time derivation in §6 plus these invariants:
 
 1. **Immutable raw store.** `raw_events` is never UPDATEd or DELETEd by the
    app (only `clear_all_data()` wipes it). If you need a "cleaned" view,
-   derive it in a query or rebuild `sessions` — never edit `raw_events`.
+   derive it in a query or read `app_sessions` — never edit `raw_events`.
 2. **Dedup happened at the bridge** (consecutive duplicate foreground
    transitions are dropped in memory) **and at the identity level**
    (`UNIQUE(device_fk, event_type_fk, timestamp, payload_hash)` rejects
    exact re-imports — the sync idempotence guarantee).
-3. **Derived data is disposable.** `sessions` can be truncated and rebuilt
-   at any time from `raw_events` — that is the design.
+3. **Derived data is disposable.** `app_sessions` / `status_sessions` can
+   be truncated and rebuilt at any time by re-running the bridge — that is
+   the design.
 4. **DB maintenance** is automatic: `PRAGMA integrity_check` + auto-VACUUM
    (when >20 % waste and >10 MB) on startup and hourly. A corrupt DB file
    is quarantined as `data.db.corrupt-<ts>` and rebuilt.
@@ -256,12 +287,17 @@ s.get_raw_events(source="android_afk")
 s.get_raw_events()                        # everything, ascending
 s.get_latest_battery()                    # newest power_change payload or None
 s.get_url_visits(since=..., until=...)
-s.get_today_seconds()                     # SUM(duration_s) of sessions today
-s.get_today_top_apps(5)                   # sessions GROUP BY app_key today
+s.get_today_seconds()                     # SUM(duration_s) of app_sessions today
+s.get_today_top_apps(5)                   # app_sessions GROUP BY app_key today
 s.count_events(since=..., until=..., event_type=...)  # cheap COUNT(*) (0.4.9)
-s.write_canonical_session({...})      # insert one derived session (no producer yet)
-s.get_canonical_sessions(app_key=..., device_id=..., since=..., until=...,
-                         platform=..., limit=...)     # derived sessions as dicts
+s.open_app_session(event_id, start_ts, app_key, payload)  # insert open session (bridge)
+s.close_app_session(event_id, end_ts)     # close it: end_ts + duration_s (0.4.10)
+s.get_app_sessions(app_key=..., device_id=..., since=..., until=...,
+                   platform=..., limit=...)             # app sessions as dicts
+s.open_status_session(event_id, start_ts, status, payload)  # insert open status block
+s.close_status_session(event_id, end_ts)  # close it: end_ts + duration_s
+s.get_status_sessions(status=..., device_id=..., since=..., until=...,
+                      platform=..., limit=...)          # status blocks as dicts
 s.close()
 ```
 All methods return dicts with `payload` parsed back to a `dict`, and
@@ -326,85 +362,92 @@ WHERE u.is_trackable = 1 ORDER BY u.seen_at;
 
 ### What a session is
 
-A **session** is one continuous foreground block: one app on one device,
-from the moment it became foreground to the moment another app replaced
-it. `session_type` is `'foreground'` and only that — AFK, screen and
-battery states are **not** sessions, they are state blocks (see
-philosophy #5).
+An **app session** is one continuous foreground block: one app on one
+device, from the moment it became foreground to the moment another app
+replaced it. A **status block** is the same shape for Windows idle state:
+one `active`/`idle`/`away` run, from the entry that started it to the next
+entry. AFK, screen and battery states are not app sessions — they are
+state blocks (see philosophy #5), and only the Windows idle state has a
+produced table today.
 
-### The philosophy (ADR-0002)
+### The philosophy (ADR-0002, amended at v8)
 
 1. **Sessions are derived, never collected.** Collectors write events to
-   `raw_events`; nothing writes `sessions` at collection time. A session
-   is the *output* of a deterministic reconstruction step.
-2. **Duration is never stored at write time.** It is computed during
-   reconstruction from event timestamps. The sole exception is Android's
+   `raw_events`. Sessions are the *output* of a deterministic derivation
+   — since v8 that derivation runs **at write time** in the event bridge
+   instead of a batch reconstructor: each `foreground_transition` /
+   `idle_transition` write opens its own row and closes the previous one.
+   Same math, earlier moment; sessions are still disposable
+   (`TRUNCATE app_sessions` + restart and the same rows return).
+2. **Duration is never authored at collection time.** It is always
+   *computed* from event timestamps — at v8 the computation happens on the
+   write path, using the *next* event's timestamp (`duration_s =
+   (next_start - start) / 1000`). The exception stays Android's
    `app_usage_interval.duration_s` — a sampling artifact of the ~60 s
    UsageStats batch, reference only.
-3. **Sessions are disposable and idempotent.** Reconstructing the same
-   window twice yields the same rows. `TRUNCATE sessions` and rebuild at
-   any time — derived data is never precious. This is why `sessions` has
-   write APIs (`write_canonical_session`) but no producer: the producer is
-   the reconstructor you re-implement.
+3. **Sessions are disposable and idempotent.** Each row is owned by one
+   event (`UNIQUE(device_fk, event_id)`), so re-writing the same event
+   never duplicates a session. Derived data is never precious.
 4. **Boundaries are half-open intervals.** A session is
    `[start_ts, next_start_ts)`: its end is the *next* transition's start.
    This works because the bridge dedups consecutive identical apps in
    memory — transitions always alternate, no two adjacent rows share an
-   app key (§3).
+   app key (§3). The last session of a run is closed at collection stop
+   (`end_ts = stop time`), so `end_ts` is never NULL on disk.
 5. **Sessions carry no device state.** Idle/away, screen on/off,
    charging/discharging are orthogonal time-series: during one session
    the user can idle, the screen can go off (Android auto-pauses, so
    events stop), or the battery can drain. Overlaying those blocks on a
    session is a query-time concern (recipe step 2), not a session
-   property.
+   property. Windows idle blocks have their own produced table
+   (`status_sessions`); the rest are query-time.
 6. **Precision is platform-honest (ADR-0001).** Windows: exact — 2 s
    poll, precise idle via `GetLastInputInfo`. Android: coarse — 10 s event
    granularity, 60 s duration batches, idle only *approximated* from
    screen state + app-event gaps (`user_presence.present`). Never pretend
-   Android knows idle seconds.
+   Android knows idle seconds. Consequently, **only Windows produces
+   `app_sessions` / `status_sessions`**; Android's tables stay empty until
+   a producer exists.
 
 ### Session shape & invariants (the contract)
 
 ```python
-start_ts: int         # first event timestamp of the block (epoch ms)
-end_ts: int           # next transition start (or last event + poll interval)
-duration_s: float     # (end - start) / 1000 (Windows); UsageStats sums (Android)
+event_id: int         # the raw_events row that started the block (NOT NULL)
+start_ts: int         # owning event timestamp (epoch ms)
+end_ts: int           # next transition start, or collection stop time
+duration_s: float     # (end_ts - start_ts) / 1000
 app_key: str          # process name (Windows) / package name (Android)
-payload: dict         # merged metadata (title, app_name, ...)
-session_type: str     # "foreground" — the only type today
+status: str           # 'active' | 'idle' | 'away' (status_sessions only)
+payload: dict         # metadata at block start (title, idle_seconds, ...)
 ```
 
-Invariants to preserve when re-implementing:
+Invariants:
 
-- One session per contiguous foreground block per app; no overlaps, no
-  gaps for the same app.
-- `end_ts >= start_ts`; `duration_s = (end_ts - start_ts) / 1000` unless
-  Android UsageStats is authoritative.
-- `device_fk` + platform carried from the events the session was built
-  from (resolve `device_id` → `device_fk` via `devices` when writing
-  sessions for foreign devices).
+- One row per owning event; no overlaps, no gaps for the same app/status.
+- `end_ts >= start_ts`; `duration_s = (end_ts - start_ts) / 1000`.
+- `device_fk` carried from the events the block was built from.
 
-### Reconstruction recipe (the "cleaning" you will re-implement)
+### How blocks are produced (v8, replaces the reconstruction recipe)
 
-Per ADR-0002, sessions are derived and idempotent. Reference recipe used by
-the reverted branch (re-implement freely, this is the shape):
+Per ADR-0002 sessions are derived and idempotent — the v8 producer makes
+the derivation explicit at write time:
 
-1. **Per platform**, pull `foreground_transition` rows for the window
-   (join `event_types`/`devices` to filter).
-2. **Windows:** pair consecutive transitions; each pair
-   `[start_ts, next_start_ts)` is a session of `app_key = payload.app`
-   (dedup already guarantees alternation). Merge in `idle_transition`
-   spans (`status != 'active'`) clipped to the session, and `power_change`
-   for charging states. Sleep = a long `away` run or a gap with no events.
-   Fill `url_visits.session_id` for visits whose `event_id` falls inside
-   the session via `backfill_url_session_id()`.
-3. **Android:** transitions give coarse start/end; refine `duration_s`
-   with the sum of `app_usage_interval.duration_s` for that package in the
-   window (UsageStats is authoritative for time-in-app). Use
-   `screen_state_change` to bound sessions and `user_presence.present`
-   for the idle-overlay approximation.
-4. Write results via `Storage.write_canonical_session()`, or keep
-   `sessions` empty and serve everything from `raw_events` queries.
+1. **Windows foreground:** on every `foreground_transition` write the
+   bridge calls `open_app_session(event_id, start_ts, app_key, payload)`
+   and then `close_app_session(previous_event_id, start_ts)` — the
+   previous session's `end_ts` is the new transition's start
+   (`app_key = payload.app`; dedup already guarantees alternation).
+2. **Windows status:** on every `idle_transition` entry the bridge calls
+   `open_status_session(...)` + `close_status_session(previous_event_id,
+   ...)` the same way — one row per status entry, including `active`.
+3. **Collection stop** closes the last open app session and status block
+   at the stop timestamp (F2 contract: `end_ts` is never NULL on disk).
+4. **url_visits backfill:** when an app session closes, the bridge stamps
+   `url_visits.session_id` for every visit whose `event_id` equals the
+   closed session's owning event.
+5. **Android:** no producer. `app_sessions`/`status_sessions` stay empty;
+   serve everything from `raw_events` queries (§5) until a producer
+   exists.
 
 ## 7. Gotchas
 
@@ -420,9 +463,10 @@ the reverted branch (re-implement freely, this is the shape):
   Windows while the app is closed — the timeline you build is
   "collection-lived", gaps are data, not corruption.
 - Desktop Windows with no battery → no `power_change` rows at all.
-- `sessions` has no producer yet, and `url_visits.session_id` is unfilled
-  until the reconstructor runs; don't query them expecting data at
-  v0.4.10. `url_visits.event_id` **is** populated at write time since v7.
+- `app_sessions` / `status_sessions` are produced **only on Windows**;
+  Android's stay empty. `url_visits.session_id` is backfilled when the
+  owning app session closes. `url_visits.event_id` **is** populated at
+  write time since v7.
 - Duplicate writes are **not** silent failures: an exact `raw_events`
   re-import raises `IntegrityError` (by design, for sync idempotence);
   duplicate `url_visits` are skipped silently (same URL revisited in one
@@ -453,23 +497,13 @@ one tool, no custom scripts.
 ### Open the database
 
 The app may be running — that is fine (WAL readers don't block writers).
-Use `-readonly` so you can never accidentally modify data. The DB lives in
-different places depending on how the app was started (see §1):
-
-| Run mode | DB path |
-|---|---|
-| Dev (`flet run`) | `<repo>\.flet\storage\data\data.db` |
-| Installed (Windows) | `%APPDATA%\Unscreen\data.db` |
+Use `-readonly` so you can never accidentally modify data:
 
 ```powershell
-# dev run — from the repo root
-sqlite3 -readonly ".flet\storage\data\data.db"
-
-# installed build
 sqlite3 -readonly "$env:APPDATA\Unscreen\data.db"
 ```
 
-(or, without PATH: `& "C:\sqlite\sqlite3.exe" -readonly ...`)
+(or, without PATH: `& "C:\sqlite\sqlite3.exe" -readonly "$env:APPDATA\Unscreen\data.db"`)
 
 You are now at the `sqlite>` prompt. Exit anytime with `.quit`.
 
@@ -480,7 +514,7 @@ You are now at the `sqlite>` prompt. Exit anytime with `.quit`.
 .schema raw_events                       -- DDL for one table (or .schema for all)
 .headers on                              -- show column names
 .mode column                             -- aligned table output (.mode box is prettier)
-PRAGMA user_version;                     -- schema version, expect 7
+PRAGMA user_version;                     -- schema version, expect 8
 PRAGMA journal_mode;                     -- expect 'wal'
 PRAGMA integrity_check;                  -- 'ok' = file is healthy
 ```
@@ -561,10 +595,6 @@ If you cannot download anything, `uv run python` has the official Python
 `sqlite3` module built in — a one-liner, not a tool:
 
 ```powershell
-# dev run — from the repo root
-uv run python -c "import sqlite3; c=sqlite3.connect(r'.flet\storage\data\data.db'); print(c.execute(\"SELECT et.name, COUNT(*) FROM raw_events e JOIN event_types et ON et.id=e.event_type_fk GROUP BY et.name\").fetchall())"
-
-# installed build
 uv run python -c "import sqlite3; c=sqlite3.connect(r'$env:APPDATA\Unscreen\data.db'); print(c.execute(\"SELECT et.name, COUNT(*) FROM raw_events e JOIN event_types et ON et.id=e.event_type_fk GROUP BY et.name\").fetchall())"
 ```
 
@@ -616,16 +646,16 @@ timestamp, payload_hash)`. Cross-device timeline queries are plain
 
 ### Schema versioning, wipe policy and durability
 
-`PRAGMA user_version` (= `SCHEMA_VERSION = 7`) gates schema handling:
+`PRAGMA user_version` (= `SCHEMA_VERSION = 8`) gates schema handling:
 up-to-date DBs are opened as-is; a DB at version 0 (fresh) gets the schema
-created; **any DB at a version below 7 is deleted and recreated fresh —
+created; **any DB at a version below 8 is deleted and recreated fresh —
 there is no data migration**. This is a deliberate early-stage policy:
 schemas are still settling, so old data is dropped rather than half-
 converted. On Android the durable backup
 (`Download/Unscreen-data-backup/unscreen.db`) is **deleted during the
-wipe** so a stale copy cannot resurrect pre-v7 data on the next install.
-"Clear all data" in Settings wipes events, sessions, url visits, and
-sync cursors (the device registry row stays).
+wipe** so a stale copy cannot resurrect pre-v8 data on the next install.
+"Clear all data" in Settings wipes events, app sessions, status sessions,
+url visits, and sync cursors (the device registry row stays).
 
 ### Automatic DB self-maintenance
 
@@ -636,7 +666,7 @@ recovered — `raw_events` is the only source, and it is gone with the file).
 There is nothing to do by hand; if you ever see `data.db.corrupt-*` files,
 that is the app telling you it survived, not that you need to repair.
 
-### URL visits — optional enrichment, Windows only (v7 wiring)
+### URL visits — optional enrichment, Windows only (v7 wiring, v8 backfill)
 
 `url_visits` is an *optional* side-channel fed by the event bridge, not
 the collector: the Windows foreground watcher attaches a `url_visit` dict
@@ -647,8 +677,8 @@ changes, and `_EventBridge` persists it against the owning
 **cached** `_last_event_id[watcher]` on tab change. The title-inference
 fallback is recorded with `confidence="low"` and
 `extraction_method=NULL`. The `foreground_transition` payload itself stays
-lean. `event_id` is always set (NOT NULL, no backfill); `session_id` gets
-filled by the future reconstructor via `backfill_url_session_id()`.
+lean. `event_id` is always set (NOT NULL, no backfill); `session_id` is
+backfilled at v8 when the owning app session closes (see §6).
 
 ### Auto-pause and "collection-lived" timelines
 

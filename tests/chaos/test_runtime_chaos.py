@@ -282,7 +282,7 @@ def test_corrupt_payloads_survive_every_query(in_memory_db) -> None:
     for i, payload in enumerate(payloads):
         in_memory_db._conn.execute(
             "INSERT INTO raw_events (device_fk, event_type_fk, source_fk, timestamp,"
-            " collected_at, payload, payload_hash) VALUES (?, ?, ?, ?, 1, ?, x'00')",
+            " collected_at, payload, payload_hash) VALUES (?, ?, ?, ?, 1, ?, 0)",
             (device_fk, event_type_fk, source_fk, i + 1, payload),
         )
 
@@ -293,7 +293,8 @@ def test_corrupt_payloads_survive_every_query(in_memory_db) -> None:
         in_memory_db.get_today_top_apps,
         in_memory_db.count_events,
         in_memory_db.get_url_visits,
-        in_memory_db.get_canonical_sessions,
+        in_memory_db.get_app_sessions,
+        in_memory_db.get_status_sessions,
         in_memory_db.check_integrity,
     ]
     for query in queries:

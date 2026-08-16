@@ -9,7 +9,8 @@ class TestFixturesAvailable:
         names = [r[0] for r in tables]
         assert "devices" in names
         assert "raw_events" in names
-        assert "sessions" in names
+        assert "app_sessions" in names
+        assert "status_sessions" in names
 
     def test_device_registered(self, in_memory_db):
         row = in_memory_db._conn.execute(
