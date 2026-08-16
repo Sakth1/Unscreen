@@ -753,6 +753,87 @@ class TestSchemaMigration:
         storage.close()
 
 
+class TestOrphanReconciliation:
+    def test_init_closes_orphaned_app_and_status_sessions(self, tmp_path):
+        db = str(tmp_path / "test.db")
+        storage = Storage(db_path=db)
+        session_id = storage.open_app_session(
+            event_id=100,
+            start_ts=1_000_000,
+            app_key="brave.exe",
+            payload={"title": "orphan"},
+        )
+        storage.write_url_visit(
+            url="https://youtube.com/watch",
+            seen_at=1_100_000,
+            event_id=100,
+            browser="Brave",
+            scheme="https",
+            host="youtube.com",
+            domain="youtube.com",
+        )
+        storage.open_status_session(
+            event_id=200,
+            start_ts=1_200_000,
+            status="idle",
+            payload={"idle_seconds": 61.0},
+        )
+        storage.close()
+
+        reopened = Storage(db_path=db)
+        try:
+            sessions = reopened.get_app_sessions()
+            assert len(sessions) == 1
+            assert sessions[0]["end_ts"] > 1_000_000
+            assert sessions[0]["duration_s"] == pytest.approx(
+                (sessions[0]["end_ts"] - 1_000_000) / 1000
+            )
+
+            visits = reopened.get_url_visits()
+            assert len(visits) == 1
+            assert visits[0]["session_id"] == session_id
+
+            statuses = reopened.get_status_sessions()
+            assert len(statuses) == 1
+            assert statuses[0]["end_ts"] > 1_200_000
+            assert statuses[0]["duration_s"] == pytest.approx(
+                (statuses[0]["end_ts"] - 1_200_000) / 1000
+            )
+        finally:
+            reopened.close()
+
+    def test_init_does_not_touch_closed_sessions(self, tmp_path):
+        db = str(tmp_path / "test.db")
+        storage = Storage(db_path=db)
+        storage.open_app_session(
+            event_id=100,
+            start_ts=1_000_000,
+            app_key="Code.exe",
+            payload={"title": "closed"},
+        )
+        storage.close_app_session(event_id=100, end_ts=1_500_000)
+        storage.close()
+
+        reopened = Storage(db_path=db)
+        try:
+            sessions = reopened.get_app_sessions()
+            assert len(sessions) == 1
+            assert sessions[0]["end_ts"] == 1_500_000
+            assert sessions[0]["duration_s"] == pytest.approx(500.0)
+        finally:
+            reopened.close()
+
+    def test_close_orphaned_sessions_returns_count(self, in_memory_db):
+        in_memory_db.open_app_session(
+            event_id=1, start_ts=1000, app_key="a.exe", payload={}
+        )
+        in_memory_db.open_app_session(
+            event_id=2, start_ts=2000, app_key="b.exe", payload={}
+        )
+        assert in_memory_db.close_orphaned_sessions(end_ts=3000) == 2
+        assert in_memory_db.close_orphaned_sessions(end_ts=4000) == 0
+
+
 class TestStorageHealthCheck:
     def test_integrity_ok_on_healthy_db(self, tmp_path):
         db = str(tmp_path / "test.db")
