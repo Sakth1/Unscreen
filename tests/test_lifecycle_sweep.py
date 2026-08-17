@@ -600,7 +600,7 @@ class TestAppHeadlessBoot:
     def test_android_boot_without_window_size(self):
         from app import App
 
-        page = mock_page()
+        page = self._page(None, None)
         page.platform.is_mobile.return_value = True
         app = App(page)
 
@@ -944,6 +944,63 @@ class TestAppHeadlessBoot:
         ):
             app = App(self._page(1280, 800))
         assert app.page.title == "Unscreen"
+
+    def _close_event(self):
+        import types
+
+        return types.SimpleNamespace(type=ft.WindowEventType.CLOSE, data=None)
+
+    def test_window_close_finalizes_sessions_and_destroys(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from app import App
+
+        app = App(self._page(1280, 800))
+        assert app.page.window.prevent_close is True
+        assert app.page.window.on_event == app._on_window_event
+
+        app.page.window.destroy = AsyncMock()
+        app.page.window.on_event(self._close_event())
+        coro = app.page.run_task.call_args.args[0]
+        asyncio.run(coro())
+
+        app.page.window.destroy.assert_awaited_once()
+
+    def test_window_close_legacy_data_event_still_finalizes(self):
+        import types
+
+        from app import App
+
+        app = App(self._page(1280, 800))
+        app.page.run_task.reset_mock()
+        app.page.window.on_event(types.SimpleNamespace(type=None, data="close"))
+        assert app.page.run_task.call_count == 1
+
+    def test_window_close_is_guarded_against_double_finalize(self):
+        from app import App
+
+        app = App(self._page(1280, 800))
+        app.page.run_task.reset_mock()
+        app.page.window.on_event(self._close_event())
+        app.page.window.on_event(self._close_event())
+        assert app.page.run_task.call_count == 1
+
+    def test_update_relaunch_finalizes_before_destroy(self):
+        import asyncio
+        from unittest.mock import AsyncMock
+
+        from app import App
+
+        app = App(self._page(1280, 800))
+        app.page.window.destroy = AsyncMock()
+
+        async def drive():
+            app._request_app_exit()
+            await asyncio.sleep(0)
+
+        asyncio.run(drive())
+        app.page.window.destroy.assert_awaited_once()
 
     def test_startup_error_renders_inline_instead_of_blank_window(self):
         from app import _render_startup_error

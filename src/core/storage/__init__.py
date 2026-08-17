@@ -82,6 +82,7 @@ class Storage:
             self._run_migrations()
             self._register_device()
             self._device_fk = self._resolve_device_fk(self._device_id)
+            self.close_orphaned_sessions(utc_timestamp())
             self._run_startup_health_checks()
             self._log_storage_info()
         except sqlite3.DatabaseError as exc:
@@ -506,6 +507,43 @@ class Storage:
             (self._device_fk, event_id),
         ).fetchone()
         return row[0] if row is not None else None
+
+    def close_orphaned_sessions(self, end_ts: int) -> int:
+        """Close every open session/block left behind by a dead instance.
+
+        The previous process may have exited without finalizing (window
+        closed, killed, crashed, update relaunch): its open ``app_sessions``
+        and ``status_sessions`` rows stay half-open (``end_ts IS NULL``) and
+        are silently excluded from every duration aggregation. Called once
+        at startup; each orphan is closed at ``end_ts`` and its
+        ``url_visits.session_id`` is backfilled. Returns the number of app
+        sessions closed.
+        """
+        open_sessions = self._conn.execute(
+            "SELECT id, event_id FROM app_sessions"
+            " WHERE device_fk = ? AND end_ts IS NULL",
+            (self._device_fk,),
+        ).fetchall()
+        for session_id, event_id in open_sessions:
+            self._conn.execute(
+                """UPDATE app_sessions
+                   SET end_ts = ?, duration_s = (? - start_ts) / 1000.0
+                   WHERE id = ?""",
+                (end_ts, end_ts, session_id),
+            )
+            self.backfill_url_sessions_for_event(event_id, session_id)
+        self._conn.execute(
+            """UPDATE status_sessions
+               SET end_ts = ?, duration_s = (? - start_ts) / 1000.0
+               WHERE device_fk = ? AND end_ts IS NULL""",
+            (end_ts, end_ts, self._device_fk),
+        )
+        if open_sessions:
+            logger.warning(
+                "Closed %d orphaned app session(s) left by a previous instance",
+                len(open_sessions),
+            )
+        return len(open_sessions)
 
     def get_app_sessions(
         self,

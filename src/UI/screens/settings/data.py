@@ -13,6 +13,10 @@ from core.logging_setup import (
     get_log_path,
     read_log_lines,
 )
+from UI.components.data_section import DataSection
+from UI.components.empty_state import EmptyState
+from UI.components.error_boundary import spawn
+from UI.components.skeleton import status_card_skeleton
 from UI.screens.settings.builders import section_scaffold
 from UI.screens.settings.settings_card import SettingsCard
 from utils.flet_helpers import safe_update, show_snack_bar
@@ -22,8 +26,6 @@ from utils.platform import is_android
 logger = logging.getLogger(__name__)
 
 _LOG_LEVELS = ["INFO", "DEBUG", "WARNING", "ERROR"]
-
-_EMPTY_LOG_MESSAGE = "No log data yet."
 
 
 class DataDiagnostics(ft.Container):
@@ -75,6 +77,7 @@ class DataDiagnostics(ft.Container):
             on_click=self._export_db,
         )
         self._file_picker = ft.FilePicker()
+        self._export_status = ft.Column(controls=[], spacing=8)
 
         self._view_logs_btn = ft.OutlinedButton(
             "View recent logs",
@@ -120,6 +123,7 @@ class DataDiagnostics(ft.Container):
                         wrap=True,
                         run_spacing=8,
                     ),
+                    self._export_status,
                 ],
             ),
             SettingsCard(
@@ -159,34 +163,50 @@ class DataDiagnostics(ft.Container):
         self._export(csv_format=False)
 
     def _export(self, csv_format: bool) -> None:
-        cm = self._collection_manager
-        if cm is None:
+        if self._collection_manager is None:
             self._toast("Collection services unavailable")
             return
-        try:
-            rows = cm.storage.get_raw_events()
-        except Exception:
-            logger.exception("Failed to read events for export")
-            self._toast("Could not read the database")
-            return
+        runner = self._page.run_task if self._page is not None else None
+        section = DataSection(
+            load=lambda: self._export_data(csv_format),
+            content=lambda path: ft.Text(
+                f"Exported to {path}",
+                size=12,
+                color=ft.Colors.ON_SURFACE_VARIANT,
+            ),
+            skeleton=status_card_skeleton(height=48),
+            empty_when=lambda path: path is None,
+            empty=EmptyState(
+                icon=ft.Icons.FILE_DOWNLOAD_OFF,
+                headline="Nothing to export yet",
+                body="Collect some data first.",
+                compact=True,
+            ),
+            error_message="Export failed",
+            runner=runner,
+        )
+        self._export_status.controls = [section]
+        safe_update(self)
+        spawn(section.run(), runner=runner)
+
+    def _export_data(self, csv_format: bool) -> str | None:
+        """Read events and write the export file; ``None`` when empty."""
+        cm = self._collection_manager
+        if cm is None:
+            raise RuntimeError("collection services unavailable")
+        rows = cm.storage.get_raw_events()
         if not rows:
-            self._toast("Nothing to export yet")
-            return
-        try:
-            filename, data = (
-                ExportService.prepare_raw_events_csv(rows)
-                if csv_format
-                else ExportService.prepare_raw_events(rows)
-            )
-            export_dir = get_export_dir()
-            path = os.path.join(export_dir, filename)
-            with open(path, "wb") as fp:
-                fp.write(data)
-        except Exception:
-            logger.exception("Export failed")
-            self._toast("Export failed")
-            return
-        self._toast(f"Exported to {path}")
+            return None
+        filename, data = (
+            ExportService.prepare_raw_events_csv(rows)
+            if csv_format
+            else ExportService.prepare_raw_events(rows)
+        )
+        export_dir = get_export_dir()
+        path = os.path.join(export_dir, filename)
+        with open(path, "wb") as fp:
+            fp.write(data)
+        return path
 
     def _export_db(self, _event) -> None:
         if self._collection_manager is None:
@@ -264,25 +284,38 @@ class DataDiagnostics(ft.Container):
         if self._page is None:
             return
         lines = read_log_lines(500)
-        content = "\n".join(lines) if lines else _EMPTY_LOG_MESSAGE
+        if lines:
+            content = ft.Column(
+                scroll=ft.ScrollMode.AUTO,
+                expand=True,
+                controls=[
+                    ft.Text(
+                        "\n".join(lines),
+                        font_family="monospace",
+                        size=12,
+                        selectable=True,
+                    )
+                ],
+            )
+        else:
+            content = ft.Container(
+                expand=True,
+                alignment=ft.Alignment.CENTER,
+                content=EmptyState(
+                    icon=ft.Icons.DESCRIPTION,
+                    headline="No log data yet",
+                    body="Logs will appear here once events are collected.",
+                    compact=True,
+                    height=None,
+                ),
+            )
         dialog = ft.AlertDialog(
             title=ft.Text("Recent logs"),
             content=ft.Container(
                 width=600,
                 height=400,
                 padding=8,
-                content=ft.Column(
-                    scroll=ft.ScrollMode.AUTO,
-                    expand=True,
-                    controls=[
-                        ft.Text(
-                            content,
-                            font_family="monospace",
-                            size=12,
-                            selectable=True,
-                        )
-                    ],
-                ),
+                content=content,
             ),
             actions=[
                 ft.TextButton("Close", on_click=lambda e: self._close_dialog(dialog))

@@ -90,8 +90,17 @@ class App:
                 "Close it and try again."
             )
 
+        self._closing = False
+
         self.page = page
         self.page.title = "Unscreen"
+
+        if detect_os() == OSType.WINDOWS:
+            # Graceful shutdown: intercept the window close so open
+            # sessions are finalized before the process dies (a killed
+            # process would leave orphaned end_ts=NULL rows behind).
+            self.page.window.prevent_close = True
+            self.page.window.on_event = self._on_window_event
 
         platform_obj = getattr(page, "platform", None)
         if platform_obj is not None and callable(
@@ -338,16 +347,48 @@ class App:
         """Called once the new installer is running; leave the rest to it.
 
         The app must exit so the installer can replace the running executable
-        (the relaunch watchdog reopens it once setup has finished).
+        (the relaunch watchdog reopens it once setup has finished). Open
+        sessions are finalized first, exactly as on a normal window close.
         """
 
-        async def _destroy() -> None:
-            try:
-                await self.page.window.destroy()
-            except Exception:
-                logger.exception("Failed to close the window after update launch")
+        if self._closing:
+            return
+        self._closing = True
+        asyncio.create_task(self._finalize_and_close())
 
-        asyncio.create_task(_destroy())
+    def _on_window_event(self, event) -> None:
+        # flet reports the close signal in `event.type` (a WindowEventType);
+        # `event.data` is always None on modern flet, so the legacy string
+        # check alone would never match and prevent_close would block the
+        # window forever. Both are checked for forward/backward compatibility.
+        event_type = getattr(event, "type", None)
+        event_data = getattr(event, "data", None)
+        if (
+            event_type in (ft.WindowEventType.CLOSE, "close")
+            or event_data in (ft.WindowEventType.CLOSE, "close")
+        ) and not self._closing:
+            self._closing = True
+            self.page.run_task(self._finalize_and_close)
+
+    async def _finalize_and_close(self) -> None:
+        """Finalize open sessions and status blocks, then destroy the window.
+
+        The window close is intercepted (``prevent_close``) so collection
+        stops gracefully instead of the process dying mid-session, which
+        would leave ``end_ts NULL`` orphans in the database.
+        """
+        try:
+            # A hung stop must never freeze the close: cap the wait so the
+            # window is destroyed even if a finalizer stalls.
+            await asyncio.wait_for(self.collection_manager.stop(), timeout=5)
+        except asyncio.TimeoutError:
+            logger.error("Timed out finalizing sessions during shutdown")
+        except Exception:
+            logger.exception("Failed to finalize sessions during shutdown")
+        try:
+            await self.page.window.destroy()
+        except Exception:
+            logger.exception("Failed to close the window")
 
     def _handle_page_resize(self, _event):
         self._apply_responsive_layout()
