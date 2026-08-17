@@ -38,7 +38,6 @@ from UI.routing import RouteManager
 from UI.screens.analytics_screen import Analytics
 from UI.screens.base_screen import BaseScreen
 from UI.screens.dashboard_screen import Dashboard
-from UI.screens.onboarding_screen import OnboardingScreen
 from UI.screens.settings.settings_card import SettingsCard
 from UI.screens.settings_screen import Settings
 from UI.screens.timeline_screen import Timeline
@@ -113,7 +112,6 @@ class App:
 
         self.config = ConfigManager()
         self.config.load()
-        self._onboarding = not self.config.onboarding_completed
         self.page.theme_mode = _theme_mode_from_config(self.config.theme_mode)
         apply_accent_theme(self.page, self.config.theme)
         self._set_window_icon()
@@ -213,34 +211,6 @@ class App:
             ft.Column(expand=True, spacing=0, controls=[self.shell, self.status_bar])
         )
 
-        if self._onboarding:
-            self._start_onboarding()
-        else:
-            self._initiate()
-            self.status_bar.start_refresh(self.page)
-            self.route_manager.navigate(self.route_manager.current_route)
-
-    def _start_onboarding(self) -> None:
-        """First run: show the onboarding flow instead of the shell chrome.
-
-        Nothing else is booted yet (no layout resolution, collection, update
-        check or auto-start) so the walkthrough stays distraction-free; the
-        regular startup sequence resumes in ``_finish_onboarding``.
-        """
-        self.status_bar.visible = False
-        self.content_container.content = OnboardingScreen(
-            page=self.page,
-            config=self.config,
-            on_done=self._finish_onboarding,
-        )
-        self.page.update()
-
-    def _finish_onboarding(self) -> None:
-        """Onboarding done (or skipped): persist, then boot the shell normally."""
-        self._onboarding = False
-        self.config.onboarding_completed = True
-        self.config.save()
-        self.status_bar.visible = True
         self._initiate()
         self.status_bar.start_refresh(self.page)
         self.route_manager.navigate(self.route_manager.current_route)
@@ -427,10 +397,6 @@ class App:
         self._apply_responsive_layout()
 
     def _apply_responsive_layout(self):
-        if self._onboarding:
-            # The shell chrome must not be built mid-walkthrough: layout
-            # resolution happens once, when onboarding completes.
-            return
         page_width, page_height = self._resolve_page_dimensions()
         layout = app_layout_resolver(
             page_width,

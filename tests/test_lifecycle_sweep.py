@@ -10,11 +10,8 @@ function names beyond the classes under test.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
-import types
-from pathlib import Path
 from unittest.mock import patch
 
 import flet as ft
@@ -28,17 +25,9 @@ from UI.layout.models import (
     ScreenFormFactor,
     SecondaryNavigationPattern,
 )
-from utils.paths import get_data_dir
 from utils.platform import OSType
 
 _EVENT_TIMEOUT_S = 5.0
-
-
-def _seed_completed_onboarding() -> None:
-    """Pre-write a config that marks onboarding done in the per-test data dir."""
-    path = Path(get_data_dir()) / "config.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"onboarding_completed": True}), encoding="utf-8")
 
 
 def _walk_controls(control):
@@ -565,7 +554,6 @@ class TestCollectionEndToEnd:
 class TestAppHeadlessBoot:
     @staticmethod
     def _page(width=None, height=None):
-        _seed_completed_onboarding()
         page = mock_page()
         page.window.width = width
         page.window.height = height
@@ -1042,117 +1030,3 @@ class TestAppHeadlessBoot:
             asyncio.run(entrypoint(page))
         page.clean.assert_called_once()
         page.update.assert_called_once()
-
-
-class TestOnboardingFlow:
-    """First-run boot: onboarding replaces the shell chrome until finished."""
-
-    @staticmethod
-    def _fresh_page(width=None, height=None):
-        page = mock_page()
-        page.window.width = width
-        page.window.height = height
-        return page
-
-    def test_first_run_boots_into_onboarding(self):
-        from app import App
-        from UI.screens.onboarding_screen import OnboardingScreen
-
-        app = App(self._fresh_page(1280, 800))
-        assert isinstance(app.content_container.content, OnboardingScreen)
-        assert app._onboarding is True
-        assert app.status_bar.visible is False
-        assert len(app.shell.controls) == 1
-        assert app.page.navigation_bar is None
-        assert not hasattr(app, "layout")
-        assert app.route_manager.current_route == "/dashboard"
-
-    def test_resize_during_onboarding_builds_no_chrome(self):
-        from app import App
-        from UI.screens.onboarding_screen import OnboardingScreen
-
-        app = App(self._fresh_page(400, 800))
-        page = app.page
-        page.width = 1280
-        page.height = 800
-        page.media = None
-        page.navigation_bar = None
-        app._handle_page_resize(None)
-
-        assert isinstance(app.content_container.content, OnboardingScreen)
-        assert app.page.navigation_bar is None
-        assert len(app.shell.controls) == 1
-        assert not hasattr(app, "layout")
-
-    def test_media_change_during_onboarding_is_ignored(self):
-        from app import App
-
-        app = App(self._fresh_page(400, 800))
-        app.page.media = types.SimpleNamespace(padding=None)
-        app._handle_media_change(None)
-        assert not hasattr(app, "layout")
-        assert app.page.navigation_bar is None
-
-    def test_finish_onboarding_resumes_normal_boot(self):
-        from app import App
-
-        app = App(self._fresh_page(400, 800))
-        app._finish_onboarding()
-
-        assert app._onboarding is False
-        assert app.config.onboarding_completed is True
-        saved = json.loads(
-            (Path(get_data_dir()) / "config.json").read_text(encoding="utf-8")
-        )
-        assert saved["onboarding_completed"] is True
-        assert app.layout.screen_form_factor is ScreenFormFactor.MOBILE
-        assert app.page.navigation_bar is not None
-        assert app.route_manager.current_route == "/dashboard"
-        assert app.content_container.content is app.dashboard_page
-        assert app.status_bar.visible is True
-
-    def test_get_started_button_completes_flow(self):
-        from app import App
-        from UI.screens.onboarding_screen import OnboardingScreen
-
-        app = App(self._fresh_page(400, 800))
-        onboarding = app.content_container.content
-        assert isinstance(onboarding, OnboardingScreen)
-
-        page_view = next(
-            c for c in _walk_controls(onboarding) if isinstance(c, ft.PageView)
-        )
-        page_view.on_change(types.SimpleNamespace(data="2"))
-        action = next(
-            c for c in _walk_controls(onboarding) if isinstance(c, ft.FilledButton)
-        )
-        action.on_click(None)
-
-        assert app._onboarding is False
-        assert app.route_manager.current_route == "/dashboard"
-        assert app.content_container.content is app.dashboard_page
-        assert app.config.onboarding_completed is True
-
-    def test_skip_button_completes_flow(self):
-        from app import App
-
-        app = App(self._fresh_page(400, 800))
-        onboarding = app.content_container.content
-        skip = next(
-            c for c in _walk_controls(onboarding) if isinstance(c, ft.TextButton)
-        )
-        skip.on_click(None)
-
-        assert app._onboarding is False
-        assert app.route_manager.current_route == "/dashboard"
-        assert app.config.onboarding_completed is True
-
-    def test_completed_onboarding_boots_straight_to_dashboard(self):
-        from app import App
-
-        _seed_completed_onboarding()
-        app = App(self._fresh_page(1280, 800))
-
-        assert app._onboarding is False
-        assert app.content_container.content is app.dashboard_page
-        assert app.layout.screen_form_factor is ScreenFormFactor.DESKTOP
