@@ -44,6 +44,10 @@ def _walk(control):
         yield from _walk(content)
 
 
+def _texts(control):
+    return [c.value for c in _walk(control) if isinstance(c, ft.Text)]
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  AFK watcher — config-driven thresholds
 #  ═══════════════════════════════════════════════════════════════════
@@ -445,6 +449,8 @@ class TestDataDiagnosticsSection:
         files = [p.name for p in tmp_path.iterdir()]
         assert any(f.startswith("raw_events") and f.endswith(".csv") for f in files)
         assert any(f.startswith("raw_events") and f.endswith(".json") for f in files)
+        status_texts = _texts(section._export_status)
+        assert any(t.startswith("Exported to ") for t in status_texts)
 
     def test_export_empty_data_is_noop(self, tmp_path, monkeypatch):
         from UI.screens.settings.data import DataDiagnostics
@@ -460,6 +466,96 @@ class TestDataDiagnosticsSection:
         section = DataDiagnostics(config=_config(tmp_path), collection_manager=cm)
         section._export_csv(None)
         assert list(tmp_path.iterdir()) == []
+        assert "Nothing to export yet" in _texts(section._export_status)
+
+    def test_export_failure_shows_error_card(self, tmp_path, monkeypatch, caplog):
+        from UI.screens.settings.data import DataDiagnostics
+
+        storage = MagicMock()
+        storage.get_raw_events.side_effect = RuntimeError("db locked")
+        cm = MagicMock()
+        cm.storage = storage
+        monkeypatch.setattr(
+            "UI.screens.settings.data.get_export_dir", lambda: str(tmp_path)
+        )
+
+        section = DataDiagnostics(config=_config(tmp_path), collection_manager=cm)
+        with caplog.at_level(logging.ERROR, logger="UI.components.error_boundary"):
+            section._export_csv(None)
+        assert "db locked" in caplog.text
+        assert _texts(section._export_status) == ["Export failed"]
+        assert any(
+            isinstance(c, ft.FilledButton) and c.content == "Retry"
+            for c in _walk(section._export_status)
+        )
+        assert list(tmp_path.iterdir()) == []
+
+    def test_export_error_retry_recovers(self, tmp_path, monkeypatch):
+        from UI.screens.settings.data import DataDiagnostics
+
+        rows = [
+            {
+                "id": 1,
+                "device_id": "dev",
+                "platform": "windows",
+                "event_type": "foreground_transition",
+                "timestamp": 1000000,
+                "collected_at": 1000000,
+                "payload": {"app": "Code.exe"},
+                "source": "foreground",
+            }
+        ]
+        storage = MagicMock()
+        storage.get_raw_events.side_effect = [RuntimeError("locked"), rows]
+        cm = MagicMock()
+        cm.storage = storage
+        monkeypatch.setattr(
+            "UI.screens.settings.data.get_export_dir", lambda: str(tmp_path)
+        )
+
+        section = DataDiagnostics(config=_config(tmp_path), collection_manager=cm)
+        section._export_csv(None)
+        assert _texts(section._export_status) == ["Export failed"]
+        retry = next(
+            c
+            for c in _walk(section._export_status)
+            if isinstance(c, ft.FilledButton) and c.content == "Retry"
+        )
+        retry.on_click(None)
+        assert any(t.startswith("Exported to ") for t in _texts(section._export_status))
+
+    def test_log_dialog_shows_empty_state_when_no_logs(self, tmp_path, monkeypatch):
+        from sweep_helpers import mock_page
+
+        from UI.screens.settings.data import DataDiagnostics
+
+        monkeypatch.setattr("UI.screens.settings.data.read_log_lines", lambda limit: [])
+        section = DataDiagnostics(config=_config(tmp_path), page=mock_page())
+        section._view_logs(None)
+        assert section._log_dialog is not None
+        section._page.show_dialog.assert_called_once_with(section._log_dialog)
+        assert "No log data yet" in _texts(section._log_dialog)
+        assert any(
+            isinstance(c, ft.Icon) and c.icon == ft.Icons.DESCRIPTION
+            for c in _walk(section._log_dialog)
+        )
+
+    def test_log_dialog_renders_monospace_lines(self, tmp_path, monkeypatch):
+        from sweep_helpers import mock_page
+
+        from UI.screens.settings.data import DataDiagnostics
+
+        monkeypatch.setattr(
+            "UI.screens.settings.data.read_log_lines", lambda limit: ["line one"]
+        )
+        section = DataDiagnostics(config=_config(tmp_path), page=mock_page())
+        section._view_logs(None)
+        texts = [c for c in _walk(section._log_dialog) if isinstance(c, ft.Text)]
+        assert [t.value for t in texts if t.font_family == "monospace"] == ["line one"]
+        assert not any(
+            isinstance(c, ft.Icon) and c.name == ft.Icons.DESCRIPTION
+            for c in _walk(section._log_dialog)
+        )
 
     def test_export_buttons_row_wraps_on_narrow_widths(self, tmp_path):
         from UI.screens.settings.data import DataDiagnostics
