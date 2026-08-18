@@ -1,1 +1,1 @@
-"""Layout-driven metrics for the custom navigation controls."""
+"""Layout-driven metrics for the custom controls (navigation chrome, update dialog)."""

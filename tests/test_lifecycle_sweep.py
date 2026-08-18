@@ -614,14 +614,14 @@ class TestAppHeadlessBoot:
 
     def test_mobile_settings_renders_inline_picker(self):
         from app import App
-        from UI.screens.settings.settings_card import SettingsCard
+        from UI.components.card_section import CardSection
 
         app = App(self._page(400, 800))
         app.route_manager.navigate("/settings")
         app._update_layout()
 
         content = app.content_container.content
-        assert isinstance(content, SettingsCard)
+        assert isinstance(content, CardSection)
         tiles = content.content.content.controls[1:]
         assert [tile.title.value for tile in tiles] == ["General", "Data", "App Info"]
 
@@ -640,24 +640,24 @@ class TestAppHeadlessBoot:
 
     def test_mobile_section_stays_open_after_layout_refresh(self):
         from app import App
-        from UI.screens.settings.settings_card import SettingsCard
+        from UI.components.card_section import CardSection
 
         app = App(self._page(400, 800))
         app.route_manager.navigate("/settings/data")
         app._update_layout()
 
         assert app.content_container.content is app.settings_page.data_section
-        assert not isinstance(app.content_container.content, SettingsCard)
+        assert not isinstance(app.content_container.content, CardSection)
 
     def test_mobile_picker_not_shown_for_plain_routes(self):
         from app import App
-        from UI.screens.settings.settings_card import SettingsCard
+        from UI.components.card_section import CardSection
 
         app = App(self._page(400, 800))
         app._update_layout()
 
         assert app.content_container.content is app.dashboard_page
-        assert not isinstance(app.content_container.content, SettingsCard)
+        assert not isinstance(app.content_container.content, CardSection)
 
     def test_desktop_resize_restores_screen_from_inline_picker(self):
         from app import App
@@ -700,14 +700,14 @@ class TestAppHeadlessBoot:
 
     def test_section_back_on_mobile_restores_picker(self):
         from app import App
-        from UI.screens.settings.settings_card import SettingsCard
+        from UI.components.card_section import CardSection
 
         app = App(self._page(400, 800))
         app.route_manager.navigate("/settings/data")
         app._go_back()
 
         assert app.route_manager.current_route == "/settings"
-        assert isinstance(app.content_container.content, SettingsCard)
+        assert isinstance(app.content_container.content, CardSection)
 
     def test_go_back_is_noop_on_top_level_route(self):
         from app import App
@@ -762,7 +762,7 @@ class TestAppHeadlessBoot:
 
     def test_navigation_bar_selection_survives_click_cycle(self):
         from app import App
-        from UI.screens.settings.settings_card import SettingsCard
+        from UI.components.card_section import CardSection
 
         app = App(self._page(400, 800))
         app.page.navigation_bar.select_index(2)
@@ -771,7 +771,7 @@ class TestAppHeadlessBoot:
         app.page.navigation_bar.select_index(3)
         assert app.page.navigation_bar.selected_index == 3
         assert app.route_manager.current_route == "/settings"
-        assert isinstance(app.content_container.content, SettingsCard)
+        assert isinstance(app.content_container.content, CardSection)
 
     def test_navigation_bar_seeded_from_current_route(self):
         from app import App
@@ -904,7 +904,7 @@ class TestAppHeadlessBoot:
         assert len(app.shell.controls) == 2
 
     def test_alert_dialog_close_runs_callback(self):
-        from UI.dialogs import show_alert_dialog
+        from UI.components.dialogs import show_alert_dialog
 
         page = mock_page()
         closed = []
@@ -915,7 +915,7 @@ class TestAppHeadlessBoot:
         page.pop_dialog.assert_called()
 
     def test_permission_dialog_shows(self):
-        from UI.dialogs import show_permission_dialog
+        from UI.components.dialogs import show_permission_dialog
 
         page = mock_page()
         show_permission_dialog(page)

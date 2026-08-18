@@ -1,4 +1,4 @@
-"""Update dialog: responsive metrics, AppState wiring, and headless construction."""
+"""Update dialog: overlay mounting, responsive metrics, AppState wiring, and headless construction."""
 
 from __future__ import annotations
 
@@ -26,75 +26,197 @@ def _update(**overrides) -> UpdateInfo:
     return UpdateInfo(**fields)
 
 
-class TestDialogWidth:
-    def test_wide_form_factors_get_constrained_width(self):
-        from UI.components.update_dialog import _dialog_width
-        from UI.layout.models import ScreenFormFactor
-
-        assert _dialog_width(ScreenFormFactor.DESKTOP) == 420.0
-        assert _dialog_width(ScreenFormFactor.TABLET_LANDSCAPE) == 420.0
-
-    def test_mobile_uses_platform_width(self):
-        from UI.components.update_dialog import _dialog_width
-        from UI.layout.models import ScreenFormFactor
-
-        assert _dialog_width(ScreenFormFactor.MOBILE) is None
-        assert _dialog_width(ScreenFormFactor.TABLET_PORTRAIT) is None
+def _overlay_dialog(page):
+    return page.overlay[0]
 
 
-class TestReleaseDate:
-    def test_formats_iso_timestamp(self):
-        from UI.components.update_dialog import _format_release_date
-
-        assert _format_release_date("2026-08-01T16:51:33Z") == "Aug 1, 2026"
-
-    def test_empty_and_garbage(self):
-        from UI.components.update_dialog import _format_release_date
-
-        assert _format_release_date("") == ""
-        assert _format_release_date("not-a-date") == ""
+def _surface(dialog):
+    return dialog.controls[1]
 
 
-class TestShowUpdateDialog:
-    def test_records_available_state_and_shows(self):
+def _buttons(dialog):
+    found = _collect(dialog, ft.FilledButton) + _collect(dialog, ft.TextButton)
+    return [b for b in found if isinstance(getattr(b, "content", None), str)]
+
+
+def _button(dialog, text):
+    return next(b for b in _buttons(dialog) if b.content == text)
+
+
+def _set_layout(width, height):
+    from UI.layout.layout_resolver import app_layout_resolver
+
+    get_app_state().set_layout(app_layout_resolver(width, height))
+
+
+class TestSurfaceMetrics:
+    def test_mobile_width_scales_to_page(self):
+        reset_app_state()
+        _set_layout(360, 800)
+        page = mock_page()
+        page.width = 360
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        assert _surface(_overlay_dialog(page)).width == 360 * 0.92
+
+    def test_desktop_width_is_fixed(self):
         reset_app_state()
         page = mock_page()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        assert _surface(_overlay_dialog(page)).width == 420.0
+
+    def test_long_notes_capped_on_tall_windows(self):
+        reset_app_state()
+        page = mock_page()
+        page.height = 1000
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(
+            page, _update(release_notes="\n".join(["* x"] * 60)), "0.4.10-dev3"
+        )
+        assert _surface(_overlay_dialog(page)).height == 640.0
+
+    def test_height_scales_to_small_windows(self):
+        reset_app_state()
+        page = mock_page()
+        page.height = 500
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(
+            page, _update(release_notes="\n".join(["* x"] * 60)), "0.4.10-dev3"
+        )
+        assert _surface(_overlay_dialog(page)).height == 450.0
+
+    def test_short_notes_compact_surface(self):
+        reset_app_state()
+        page = mock_page()
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(
+            page, _update(release_notes="* One short bullet"), "0.4.10-dev3"
+        )
+        assert _surface(_overlay_dialog(page)).height < 400.0
+
+    def test_surface_never_below_minimum(self):
+        reset_app_state()
+        page = mock_page()
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(release_notes=""), "0.4.10-dev3")
+        assert _surface(_overlay_dialog(page)).height == 260.0
+
+    def test_mobile_cap_lower_than_desktop(self):
+        reset_app_state()
+        _set_layout(360, 800)
+        page = mock_page()
+        page.width = 360
+        page.height = 1000
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(
+            page, _update(release_notes="\n".join(["* x"] * 60)), "0.4.10-dev3"
+        )
+        assert _surface(_overlay_dialog(page)).height == 600.0
+
+    def test_open_surface_resizes_on_layout_change(self):
+        reset_app_state()
+        _set_layout(1280, 800)
+        page = mock_page()
+        page.width = 1280
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(
+            page, _update(release_notes="\n".join(["* x"] * 60)), "0.4.10-dev3"
+        )
+        surface = _surface(_overlay_dialog(page))
+        assert surface.width == 420.0
+        assert surface.height == 640.0
+        _set_layout(360, 500)
+        assert surface.width == 360 * 0.92
+        assert surface.height == 450.0
+
+
+class TestNotesHeightEstimate:
+    def test_empty_notes(self):
+        from UI.custom.update_dialog import _estimate_notes_height
+
+        assert _estimate_notes_height("", 420.0) == 0.0
+
+    def test_blank_lines_count_as_lines(self):
+        from UI.custom.update_dialog import _estimate_notes_height
+
+        assert _estimate_notes_height("\n", 420.0) == 34.0
+
+    def test_long_line_wraps(self):
+        from UI.custom.update_dialog import _estimate_notes_height
+
+        single = _estimate_notes_height("* x", 420.0)
+        wrapped = _estimate_notes_height("* " + "word " * 200, 420.0)
+        assert wrapped > single * 5
+
+    def test_headings_taller_than_paragraphs(self):
+        from UI.custom.update_dialog import _estimate_notes_height
+
+        assert _estimate_notes_height("## Heading", 420.0) > _estimate_notes_height(
+            "plain", 420.0
+        )
+
+    def test_narrow_width_wraps_more(self):
+        from UI.custom.update_dialog import _estimate_notes_height
+
+        long_line = "word " * 100
+        assert _estimate_notes_height(long_line, 200.0) > _estimate_notes_height(
+            long_line, 420.0
+        )
+
+
+class TestShowUpdateDialog:
+    def test_records_available_state_and_mounts_overlay(self):
+        reset_app_state()
+        page = mock_page()
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
         state = get_app_state()
         assert state.update_status is UpdateStatus.AVAILABLE
         assert state.update_info is not None
         assert state.update_info.version == "0.4.9"
-        page.show_dialog.assert_called_once()
+        assert len(page.overlay) == 1
+        assert _overlay_dialog(page) is page.overlay[0]
 
     def test_installable_dialog_has_install_button(self, monkeypatch):
         reset_app_state()
-        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: True)
+        monkeypatch.setattr("UI.custom.update_dialog.is_packaged", lambda: True)
         page = mock_page()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        dialog = page.show_dialog.call_args.args[0]
-        labels = [b.content for b in dialog.actions]
+        labels = [b.content for b in _buttons(_overlay_dialog(page))]
         assert "Download & install" in labels
         assert "Later" in labels
         assert "Open releases page" in labels
 
     def test_manual_only_dialog_omits_install(self, monkeypatch):
         reset_app_state()
-        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: False)
+        monkeypatch.setattr("UI.custom.update_dialog.is_packaged", lambda: False)
         page = mock_page()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(
             page, _update(asset_url=None, asset_name=None), "0.4.10-dev3"
         )
-        dialog = page.show_dialog.call_args.args[0]
-        labels = [b.content for b in dialog.actions]
+        labels = [b.content for b in _buttons(_overlay_dialog(page))]
         assert "Download & install" not in labels
         assert "Open releases page" in labels
 
@@ -102,11 +224,10 @@ class TestShowUpdateDialog:
         reset_app_state()
         page = mock_page()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        dialog = page.show_dialog.call_args.args[0]
-        markdown_controls = _collect(dialog, ft.Markdown)
+        markdown_controls = _collect(_surface(_overlay_dialog(page)), ft.Markdown)
         assert len(markdown_controls) == 1
         assert "## What's Changed" in markdown_controls[0].value
 
@@ -114,40 +235,108 @@ class TestShowUpdateDialog:
         reset_app_state()
         page = mock_page()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(release_notes=""), "0.4.10-dev3")
-        dialog = page.show_dialog.call_args.args[0]
+        surface = _surface(_overlay_dialog(page))
         assert any(
             isinstance(t, ft.Text) and "No release notes" in (t.value or "")
-            for t in _collect(dialog, ft.Text)
+            for t in _collect(surface, ft.Text)
         )
 
-    def test_close_resets_state_to_idle(self):
+    def test_close_removes_overlay_and_resets_state(self):
         reset_app_state()
         page = mock_page()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        dialog = page.show_dialog.call_args.args[0]
-        later = next(b for b in dialog.actions if b.content == "Later")
-        later.on_click(None)
+        _button(_overlay_dialog(page), "Later").on_click(None)
+        assert page.overlay == []
         assert get_app_state().update_status is UpdateStatus.IDLE
+
+    def test_close_unsubscribes_layout_observer(self):
+        reset_app_state()
+        page = mock_page()
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        _button(_overlay_dialog(page), "Later").on_click(None)
+        assert get_app_state()._observers.get("layout") == []
+
+    def test_close_releases_surface_entrance(self):
+        reset_app_state()
+        page = mock_page()
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        surface = _surface(_overlay_dialog(page))
+        assert surface.animate_opacity is not None
+        assert surface.opacity == 1
+        assert surface.animate_scale is not None
+        assert surface.scale == 1.0
+
+    def test_reduced_motion_skips_scale(self, monkeypatch):
+        reset_app_state()
+        monkeypatch.setattr("UI.components.motion.is_reduced_motion", lambda: True)
+        page = mock_page()
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        surface = _surface(_overlay_dialog(page))
+        assert surface.animate_opacity is not None
+        assert surface.opacity == 1
+        assert surface.animate_scale is None
 
     def test_install_flow_updates_state(self, monkeypatch):
         reset_app_state()
-        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: True)
+        monkeypatch.setattr("UI.custom.update_dialog.is_packaged", lambda: True)
         page = mock_page()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        dialog = page.show_dialog.call_args.args[0]
-        install = next(b for b in dialog.actions if b.content == "Download & install")
-        install.on_click(None)
+        _button(_overlay_dialog(page), "Download & install").on_click(None)
         assert get_app_state().update_status is UpdateStatus.DOWNLOADING
         page.run_task.assert_called_once()
+
+
+class TestKeyboard:
+    def test_escape_closes_and_restores_prior_handler(self):
+        import unittest.mock
+
+        reset_app_state()
+        prior = unittest.mock.MagicMock()
+        page = mock_page()
+        page.on_keyboard_event = prior
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        assert page.on_keyboard_event is not prior
+        page.on_keyboard_event(unittest.mock.MagicMock(key="Escape"))
+        assert page.overlay == []
+        assert get_app_state().update_status is UpdateStatus.IDLE
+        assert page.on_keyboard_event is prior
+
+    def test_other_keys_fall_through_to_prior_handler(self):
+        import unittest.mock
+
+        reset_app_state()
+        prior = unittest.mock.MagicMock()
+        page = mock_page()
+        page.on_keyboard_event = prior
+        page.height = 800
+        from UI.custom.update_dialog import show_update_dialog
+
+        show_update_dialog(page, _update(), "0.4.10-dev3")
+        event = unittest.mock.MagicMock(key="ArrowDown")
+        page.on_keyboard_event(event)
+        prior.assert_called_once_with(event)
+        assert len(page.overlay) == 1
 
 
 class TestAndroidInstallFinishesActivity:
@@ -159,8 +348,8 @@ class TestAndroidInstallFinishesActivity:
         from core.update_checker import ApplyResult
 
         reset_app_state()
-        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: True)
-        monkeypatch.setattr("UI.components.update_dialog.is_android", lambda: True)
+        monkeypatch.setattr("UI.custom.update_dialog.is_packaged", lambda: True)
+        monkeypatch.setattr("UI.custom.update_dialog.is_android", lambda: True)
         apk = tmp_path / "app.apk"
         apk.write_bytes(b"apk")
 
@@ -173,18 +362,16 @@ class TestAndroidInstallFinishesActivity:
             def download(self, update, dest, on_progress):
                 return str(apk)
 
-        monkeypatch.setattr("UI.components.update_dialog.Updater", FakeUpdater)
-        monkeypatch.setattr("UI.components.update_dialog.UpdateChecker", FakeChecker)
+        monkeypatch.setattr("UI.custom.update_dialog.Updater", FakeUpdater)
+        monkeypatch.setattr("UI.custom.update_dialog.UpdateChecker", FakeChecker)
 
         page = mock_page()
         page.window.destroy = unittest.mock.AsyncMock()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        dialog = page.show_dialog.call_args.args[0]
-        install = next(b for b in dialog.actions if b.content == "Download & install")
-        install.on_click(None)
+        _button(_overlay_dialog(page), "Download & install").on_click(None)
 
         run_install = page.run_task.call_args.args[0]
         loop = asyncio.new_event_loop()
@@ -204,8 +391,8 @@ class TestAndroidInstallFinishesActivity:
         from core.update_checker import ApplyResult
 
         reset_app_state()
-        monkeypatch.setattr("UI.components.update_dialog.is_packaged", lambda: True)
-        monkeypatch.setattr("UI.components.update_dialog.is_android", lambda: True)
+        monkeypatch.setattr("UI.custom.update_dialog.is_packaged", lambda: True)
+        monkeypatch.setattr("UI.custom.update_dialog.is_android", lambda: True)
         apk = tmp_path / "app.apk"
         apk.write_bytes(b"apk")
 
@@ -217,17 +404,15 @@ class TestAndroidInstallFinishesActivity:
             def download(self, update, dest, on_progress):
                 return str(apk)
 
-        monkeypatch.setattr("UI.components.update_dialog.Updater", FakeUpdater)
-        monkeypatch.setattr("UI.components.update_dialog.UpdateChecker", FakeChecker)
+        monkeypatch.setattr("UI.custom.update_dialog.Updater", FakeUpdater)
+        monkeypatch.setattr("UI.custom.update_dialog.UpdateChecker", FakeChecker)
 
         page = mock_page()
         page.height = 800
-        from UI.components.update_dialog import show_update_dialog
+        from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        dialog = page.show_dialog.call_args.args[0]
-        install = next(b for b in dialog.actions if b.content == "Download & install")
-        install.on_click(None)
+        _button(_overlay_dialog(page), "Download & install").on_click(None)
 
         run_install = page.run_task.call_args.args[0]
         loop = asyncio.new_event_loop()

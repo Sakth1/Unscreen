@@ -588,7 +588,7 @@ class TestDataDiagnosticsSection:
         )
         section._export_db(None)
         section._page.run_task.assert_called_once_with(section._export_db_pick_location)
-        section._page.overlay.append.assert_not_called()
+        assert section._page.overlay == []
 
     def test_export_db_direct_fallback_writes_file(self, tmp_path, monkeypatch):
         from UI.screens.settings.data import DataDiagnostics
@@ -861,7 +861,7 @@ class TestAppInfoSection:
 
 class TestUpdateProgress:
     def test_set_progress_sets_bar_and_text(self):
-        from UI.components.update_dialog import _UpdateProgress
+        from UI.custom.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         progress.set_progress(10_000_000, 60_000_000)
@@ -870,7 +870,7 @@ class TestUpdateProgress:
         assert "10.0 / 60.0 MB" in progress._status.value
 
     def test_set_progress_without_total_is_indeterminate(self):
-        from UI.components.update_dialog import _UpdateProgress
+        from UI.custom.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         progress.set_progress(5_000_000, None)
@@ -878,7 +878,7 @@ class TestUpdateProgress:
         assert "5.0 MB" in progress._status.value
 
     def test_set_busy_is_indeterminate(self):
-        from UI.components.update_dialog import _UpdateProgress
+        from UI.custom.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         progress.set_busy("Preparing…")
@@ -888,7 +888,7 @@ class TestUpdateProgress:
     def test_set_progress_shows_speed_on_second_call(self):
         import time
 
-        from UI.components.update_dialog import _UpdateProgress
+        from UI.custom.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         progress._last_time = time.monotonic() - 2.0
@@ -897,7 +897,7 @@ class TestUpdateProgress:
         assert "5.0 MB/s" in progress._status.value
 
     def test_starts_hidden_and_becomes_visible(self):
-        from UI.components.update_dialog import _UpdateProgress
+        from UI.custom.update_dialog import _UpdateProgress
 
         progress = _UpdateProgress()
         assert progress.visible is False

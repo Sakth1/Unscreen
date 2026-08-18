@@ -6,8 +6,8 @@ import flet as ft
 import core.auto_start as auto_start
 from core.config_manager import ConfigManager
 from core.theme import theme_is_valid, theme_label, theme_names
+from UI.components.card_section import CardSection
 from UI.screens.settings.builders import section_scaffold
-from UI.screens.settings.settings_card import SettingsCard
 from UI.theme import apply_accent_theme
 from utils.flet_helpers import show_snack_bar
 from utils.platform import OSType, detect_os
@@ -134,7 +134,7 @@ class General(ft.Container):
         )
 
         cards = [
-            SettingsCard(
+            CardSection(
                 "Tracking",
                 [
                     self._collection_switch,
@@ -142,7 +142,7 @@ class General(ft.Container):
                     *watcher_rows,
                 ],
             ),
-            SettingsCard(
+            CardSection(
                 "Appearance",
                 [
                     ft.Row(
@@ -160,11 +160,11 @@ class General(ft.Container):
                     self._maximized_switch,
                 ],
             ),
-            SettingsCard("Startup", [self._autostart_switch]),
+            CardSection("Startup", [self._autostart_switch]),
         ]
         if not is_android:
             cards.append(
-                SettingsCard(
+                CardSection(
                     "Activity thresholds",
                     [
                         ft.Text("When is the machine considered idle or away?"),

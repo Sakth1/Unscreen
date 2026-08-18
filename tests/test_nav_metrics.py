@@ -1,9 +1,10 @@
-"""Tests for the layout-driven metrics of the custom navigation controls.
+"""Tests for the layout-driven metrics of the custom controls.
 
 Metrics are resolved inside :mod:`UI.layout.layout_resolver` and carried on
 :class:`AppLayout` (``drawer_metrics``, ``nav_bar_metrics``,
-``secondary_navigation_metrics``), so the drawer and floating bar behaviour
-on every window size is pinned here without needing a live Flet client.
+``secondary_navigation_metrics``, ``dialog_metrics``), so the drawer,
+floating bar and update-dialog behaviour on every window size is pinned
+here without needing a live Flet client.
 """
 
 from __future__ import annotations
@@ -12,10 +13,15 @@ from types import SimpleNamespace
 
 from UI.layout.layout_resolver import (
     app_layout_resolver,
+    resolve_dialog_metrics,
     resolve_drawer_metrics,
     resolve_navbar_metrics,
 )
-from UI.layout.models import NavigationPattern, WindowHeightClass
+from UI.layout.models import (
+    NavigationPattern,
+    ScreenFormFactor,
+    WindowHeightClass,
+)
 
 
 class TestDrawerMetrics:
@@ -92,3 +98,41 @@ class TestNavBarMetrics:
             (0.0, 0.0, 0.0, 34.0), 400, WindowHeightClass.MEDIUM
         )
         assert metrics.margin_bottom == 24 + 34
+
+
+class TestDialogMetrics:
+    def test_wide_form_factors_get_fixed_width(self):
+        for form_factor in (
+            ScreenFormFactor.TABLET_LANDSCAPE,
+            ScreenFormFactor.DESKTOP,
+        ):
+            metrics = resolve_dialog_metrics(form_factor, 1280, 800)
+            assert metrics.width == 420.0
+            assert metrics.max_height == 640.0
+
+    def test_wide_height_cap_scales_with_window(self):
+        metrics = resolve_dialog_metrics(ScreenFormFactor.DESKTOP, 1280, 500)
+        assert metrics.max_height == 450.0
+
+    def test_mobile_width_scales_with_viewport(self):
+        metrics = resolve_dialog_metrics(ScreenFormFactor.MOBILE, 360, 800)
+        assert metrics.width == 360 * 0.92
+
+    def test_mobile_width_never_exceeds_dialog_width(self):
+        metrics = resolve_dialog_metrics(ScreenFormFactor.MOBILE, 590, 800)
+        assert metrics.width == 420.0
+
+    def test_mobile_cap_lower_than_desktop(self):
+        metrics = resolve_dialog_metrics(ScreenFormFactor.MOBILE, 360, 1000)
+        assert metrics.max_height == 600.0
+
+    def test_floor_and_chrome_are_constant(self):
+        metrics = resolve_dialog_metrics(ScreenFormFactor.DESKTOP, 1280, 800)
+        assert metrics.min_height == 260.0
+        assert metrics.chrome_height == 240.0
+
+    def test_resolved_on_app_layout(self):
+        layout = app_layout_resolver(1280, 800)
+        assert layout.dialog_metrics.width == 420.0
+        layout = app_layout_resolver(360, 800)
+        assert layout.dialog_metrics.width == 360 * 0.92
