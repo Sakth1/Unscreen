@@ -2,6 +2,7 @@ import logging
 
 from UI.layout.models import (
     AppLayout,
+    DialogMetrics,
     DrawerMetrics,
     NavBarMetrics,
     NavigationPattern,
@@ -27,6 +28,27 @@ from utils.constants import (
 )
 
 logger = logging.getLogger(__name__)
+
+#: Surface width on wide form factors (within the M3 dialog width range).
+_DIALOG_WIDTH = 420.0
+
+#: Surface height cap for wide form factors; taller content scrolls inside.
+_DIALOG_MAX_HEIGHT = 640.0
+
+#: Surface height cap for narrow form factors (phones, portrait tablets).
+_MOBILE_MAX_HEIGHT = 600.0
+
+#: Smallest surface height even for one-line notes.
+_MIN_SURFACE_HEIGHT = 260.0
+
+#: Fraction of the window height used below the cap.
+_DIALOG_HEIGHT_FACTOR = 0.9
+
+#: Mobile gutter factor so the surface never touches the screen edges.
+_MOBILE_WIDTH_FACTOR = 0.92
+
+#: Fixed chrome around the notes (header, chips, meta, actions, paddings).
+_DIALOG_CHROME_HEIGHT = 240.0
 
 
 def _resolve_width_class(width: float) -> WindowWidthClass:
@@ -222,6 +244,30 @@ def resolve_navbar_metrics(
     )
 
 
+def resolve_dialog_metrics(
+    form_factor: ScreenFormFactor, width: float, height: float
+) -> DialogMetrics:
+    """Derive update-dialog surface limits from the form factor and viewport.
+
+    Wide form factors (tablet landscape, desktop) get a fixed surface width
+    within the M3 dialog range; narrow ones (phones, portrait tablets) scale
+    with the viewport so the surface never touches the screen edges. The
+    height cap is form-factor relative and window relative (90% of the
+    window height); the fixed chrome around the notes stays constant.
+    """
+    wide = form_factor in (ScreenFormFactor.TABLET_LANDSCAPE, ScreenFormFactor.DESKTOP)
+    surface_width = (
+        _DIALOG_WIDTH if wide else min(_DIALOG_WIDTH, width * _MOBILE_WIDTH_FACTOR)
+    )
+    max_height = _DIALOG_MAX_HEIGHT if wide else _MOBILE_MAX_HEIGHT
+    return DialogMetrics(
+        width=float(surface_width),
+        max_height=float(min(max_height, height * _DIALOG_HEIGHT_FACTOR)),
+        min_height=_MIN_SURFACE_HEIGHT,
+        chrome_height=_DIALOG_CHROME_HEIGHT,
+    )
+
+
 def app_layout_resolver(
     page_width: float,
     page_height: float,
@@ -301,6 +347,7 @@ def app_layout_resolver(
     nav_bar_metrics: NavBarMetrics = resolve_navbar_metrics(
         safe_padding, width, height_class
     )
+    dialog_metrics: DialogMetrics = resolve_dialog_metrics(form_factor, width, height)
 
     return AppLayout(
         screen_form_factor=form_factor,
@@ -318,4 +365,5 @@ def app_layout_resolver(
         drawer_metrics=drawer_metrics,
         secondary_navigation_metrics=secondary_navigation_metrics,
         nav_bar_metrics=nav_bar_metrics,
+        dialog_metrics=dialog_metrics,
     )

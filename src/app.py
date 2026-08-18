@@ -12,6 +12,8 @@ from core.config_manager import ConfigManager
 from core.logging_setup import apply_root_level, get_log_path, setup_file_logging
 from core.state.app_state import UpdateStatus, get_app_state
 from core.update_checker import UpdateChecker
+from UI.components.card_section import CardSection
+from UI.components.dialogs import show_permission_dialog
 from UI.custom.navigation_bar import (
     CustomNavigationBar,
     CustomNavigationBarDestination,
@@ -25,7 +27,7 @@ from UI.custom.secondary_navigation_panel import (
     SecondaryNavigationPanel,
 )
 from UI.custom.status_bar import CollectionStatusBar
-from UI.dialogs import show_permission_dialog
+from UI.custom.update_dialog import show_update_dialog
 from UI.layout.layout_resolver import app_layout_resolver
 from UI.layout.models import (
     AppLayout,
@@ -38,7 +40,6 @@ from UI.routing import RouteManager
 from UI.screens.analytics_screen import Analytics
 from UI.screens.base_screen import BaseScreen
 from UI.screens.dashboard_screen import Dashboard
-from UI.screens.settings.settings_card import SettingsCard
 from UI.screens.settings_screen import Settings
 from UI.screens.timeline_screen import Timeline
 from UI.theme import apply_accent_theme
@@ -334,8 +335,6 @@ class App:
 
     def _open_update_dialog(self, info) -> None:
         """Offer download + install for a known update (settings or snackbar)."""
-        from UI.screens.settings.app_info import show_update_dialog
-
         show_update_dialog(
             self.page,
             info,
@@ -510,7 +509,7 @@ class App:
         self.secondary_destination: list[NavigationDestination] = (
             self.current_view._get_secondary_options()
         )
-        self._inline_picker_content = SettingsCard(
+        self._inline_picker_content = CardSection(
             title="Settings",
             controls=[
                 ft.ListTile(

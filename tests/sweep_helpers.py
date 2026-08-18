@@ -74,6 +74,7 @@ def mock_page() -> unittest.mock.MagicMock:
     page.media = None
     page.views = []
     page.controls = []
+    page.overlay = []
     page.title = ""
     page.theme_mode = None
     page.on_resize = None

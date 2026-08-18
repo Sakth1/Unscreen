@@ -11,10 +11,10 @@ from core.state.app_state import (
     get_app_state,
 )
 from core.update_checker import UpdateChecker, UpdateCheckError
-from UI.components.update_dialog import show_update_dialog
-from UI.dialogs import show_alert_dialog
+from UI.components.card_section import CardSection
+from UI.components.dialogs import show_alert_dialog
+from UI.custom.update_dialog import show_update_dialog
 from UI.screens.settings.builders import section_scaffold
-from UI.screens.settings.settings_card import SettingsCard
 from utils.flet_helpers import show_snack_bar
 from utils.paths import get_data_dir
 from utils.platform import detect_os
@@ -85,7 +85,7 @@ class AppInfo(ft.Container):
         )
 
         cards = [
-            SettingsCard(
+            CardSection(
                 "Updates",
                 [
                     ft.Row(
@@ -107,7 +107,7 @@ class AppInfo(ft.Container):
                     ),
                 ],
             ),
-            SettingsCard(
+            CardSection(
                 "About",
                 [
                     _info_row("Version", self._version),
@@ -116,7 +116,7 @@ class AppInfo(ft.Container):
                     _info_row("Data directory", self._data_dir),
                 ],
             ),
-            SettingsCard(
+            CardSection(
                 "Privacy",
                 [
                     ft.Text(

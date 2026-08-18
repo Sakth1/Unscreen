@@ -126,6 +126,21 @@ class NavBarMetrics:
 
 
 @dataclass(frozen=True)
+class DialogMetrics:
+    """Window-derived limits the custom update dialog needs for the current layout.
+
+    The dialog composes its content-aware surface height (fixed chrome plus
+    the estimated release-notes height) inside ``max_height`` / ``min_height``;
+    ``width`` is the form-factor surface width.
+    """
+
+    width: float
+    max_height: float
+    min_height: float
+    chrome_height: float
+
+
+@dataclass(frozen=True)
 class AppLayout:
     """Resolved responsive metrics for the current page size.
 
@@ -145,6 +160,7 @@ class AppLayout:
     drawer_metrics: DrawerMetrics
     secondary_navigation_metrics: SecondaryDrawerMetrics
     nav_bar_metrics: NavBarMetrics
+    dialog_metrics: DialogMetrics
     padding: float = 16.0
     orientation: Orientation = Orientation.LANDSCAPE
     width_class: WindowWidthClass = WindowWidthClass.EXTRA_LARGE

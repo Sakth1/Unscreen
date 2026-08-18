@@ -1,7 +1,7 @@
 import flet as ft
 
 
-class SettingsCard(ft.Card):
+class CardSection(ft.Card):
     """Section card with a bold title and stacked controls."""
 
     def __init__(self, title: str, controls: list[ft.Control]):

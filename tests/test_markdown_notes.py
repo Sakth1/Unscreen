@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 import flet as ft
 from sweep_helpers import mock_page
 
-from UI.markdown_notes import (
+from UI.custom.update_dialog import (
     _link_handler,
     build_notes_markdown,
     sanitize_release_notes,

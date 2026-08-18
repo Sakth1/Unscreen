@@ -13,12 +13,12 @@ from core.logging_setup import (
     get_log_path,
     read_log_lines,
 )
+from UI.components.card_section import CardSection
 from UI.components.data_section import DataSection
 from UI.components.empty_state import EmptyState
 from UI.components.error_boundary import spawn
 from UI.components.skeleton import status_card_skeleton
 from UI.screens.settings.builders import section_scaffold
-from UI.screens.settings.settings_card import SettingsCard
 from utils.flet_helpers import safe_update, show_snack_bar
 from utils.paths import get_export_dir
 from utils.platform import is_android
@@ -98,7 +98,7 @@ class DataDiagnostics(ft.Container):
         )
 
         cards = [
-            SettingsCard(
+            CardSection(
                 "Logging",
                 [
                     self._log_level_dropdown,
@@ -107,7 +107,7 @@ class DataDiagnostics(ft.Container):
                     ),
                 ],
             ),
-            SettingsCard(
+            CardSection(
                 "Export",
                 [
                     ft.Text(
@@ -126,11 +126,11 @@ class DataDiagnostics(ft.Container):
                     self._export_status,
                 ],
             ),
-            SettingsCard(
+            CardSection(
                 "Logs",
                 [self._view_logs_btn, self._clear_logs_btn],
             ),
-            SettingsCard(
+            CardSection(
                 "Danger zone",
                 [
                     ft.Text(
@@ -337,7 +337,7 @@ class DataDiagnostics(ft.Container):
     def _confirm_clear_all_data(self, _event) -> None:
         if self._page is None:
             return
-        from UI.dialogs import show_confirm_dialog
+        from UI.components.dialogs import show_confirm_dialog
 
         show_confirm_dialog(
             self._page,

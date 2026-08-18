@@ -172,3 +172,5 @@ tae
 dev_dairy.md
 dev
 .flet
+trials/
+.github/hooks/
