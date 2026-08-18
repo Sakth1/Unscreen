@@ -148,6 +148,10 @@ class Storage:
     def db_path(self) -> str:
         return self._path
 
+    @property
+    def device_id(self) -> str:
+        return self._device_id
+
     def _connect(self) -> sqlite3.Connection:
         conn = None
         try:
@@ -414,6 +418,7 @@ class Storage:
         self,
         event_type: str | None = None,
         source: str | None = None,
+        device_id: str | None = None,
         since: int | None = None,
         until: int | None = None,
         limit: int | None = None,
@@ -428,6 +433,9 @@ class Storage:
         if source:
             filters.append("s.name = ?")
             params.append(source)
+        if device_id:
+            filters.append("d.device_id = ?")
+            params.append(device_id)
         if since is not None:
             filters.append("e.timestamp >= ?")
             params.append(since)
@@ -544,6 +552,88 @@ class Storage:
                 len(open_sessions),
             )
         return len(open_sessions)
+
+    def replace_device_sessions(
+        self,
+        device_id: str,
+        app_sessions: list[dict],
+        status_sessions: list[dict],
+    ) -> None:
+        """Replace every derived session row for ``device_id``.
+
+        Delete-and-rebuild in one transaction — sessions are a derived
+        view (ADR-0002), so wiping and re-inserting per device is
+        idempotent. ``app_sessions`` rows need ``event_id``, ``start_ts``,
+        ``end_ts`` (or None), ``duration_s`` (or None), ``app_key`` and
+        ``payload``; ``status_sessions`` rows need the same plus
+        ``status`` instead of ``app_key``. On any failure the transaction
+        rolls back, leaving the previous rows intact.
+        """
+        device_fk = self._resolve_device_fk(device_id)
+        if device_fk is None:
+            raise ValueError(f"Unknown device: {device_id}")
+        self._conn.execute("BEGIN")
+        try:
+            self._conn.execute(
+                "DELETE FROM app_sessions WHERE device_fk = ?", (device_fk,)
+            )
+            self._conn.execute(
+                "DELETE FROM status_sessions WHERE device_fk = ?", (device_fk,)
+            )
+            for row in app_sessions:
+                self._conn.execute(
+                    """INSERT INTO app_sessions
+                       (device_fk, event_id, start_ts, end_ts, duration_s,
+                        app_key, payload)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        device_fk,
+                        row["event_id"],
+                        row["start_ts"],
+                        row["end_ts"],
+                        row["duration_s"],
+                        row["app_key"],
+                        json.dumps(row["payload"], sort_keys=True, ensure_ascii=True),
+                    ),
+                )
+            for row in status_sessions:
+                self._conn.execute(
+                    """INSERT INTO status_sessions
+                       (device_fk, event_id, start_ts, end_ts, duration_s,
+                        status, payload)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        device_fk,
+                        row["event_id"],
+                        row["start_ts"],
+                        row["end_ts"],
+                        row["duration_s"],
+                        row["status"],
+                        json.dumps(row["payload"], sort_keys=True, ensure_ascii=True),
+                    ),
+                )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
+    def list_devices(self) -> list[dict]:
+        """Return every registered device, oldest first."""
+        return [
+            {
+                "id": r[0],
+                "device_id": r[1],
+                "hostname": r[2],
+                "platform": r[3],
+                "first_seen": r[4],
+                "last_seen": r[5],
+                "is_current": bool(r[6]),
+            }
+            for r in self._conn.execute(
+                "SELECT id, device_id, hostname, platform, first_seen, last_seen,"
+                " is_current FROM devices ORDER BY first_seen"
+            )
+        ]
 
     def get_app_sessions(
         self,
@@ -820,6 +910,7 @@ class Storage:
     def count_events(
         self,
         event_type: str | None = None,
+        device_id: str | None = None,
         since: int | None = None,
         until: int | None = None,
     ) -> int:
@@ -830,6 +921,9 @@ class Storage:
         if event_type:
             filters.append("et.name = ?")
             params.append(event_type)
+        if device_id:
+            filters.append("e.device_fk = (SELECT id FROM devices WHERE device_id = ?)")
+            params.append(device_id)
         if since is not None:
             filters.append("e.timestamp >= ?")
             params.append(since)
