@@ -167,3 +167,35 @@ Principles 2 and 3 of this ADR are **amended** for Windows:
   BLOB). Same dedup semantics, half the storage.
 - **Pre-v8 databases are wiped and recreated fresh** — same early-stage
   policy, extended to v8.
+
+## Android session derivation (v0.5.x) — the write-time amendment does not extend to Android
+
+Android sessions are produced by a **derivation pass over raw events**
+(`core/application/session_reconstructor.py`), not by the write-time
+bridge, because:
+
+- **Screen-off is the only reliable session boundary.** On Android, apps
+  keep running and `foreground_transition` only fires when the foreground
+  package actually changes (10s poll, plus two-stage confirm). A
+  write-time producer would have to guess session ends; the reconstructor
+  splits app sessions at `screen_state_change` off and reopens the
+  last-known app on screen-on.
+- **`app_usage_interval` is never a session source.** QueryEvents
+  intervals overstate durations (observed 148s of "usage" inside a 60s
+  poll window) and are unreliable on Android 14+ (queryEvents staleness,
+  Google issue 309104474). It remains an event type only.
+- **Statuses follow screen state, not input idleness.** Android has no
+  `GetLastInputInfo` equivalent; the AccessibilityService route was
+  rejected (policy, battery, and a Python app's runtime costs). Status
+  blocks derive `active`/`away` from `screen_state_change`; `user_presence`
+  stays event-only. "AFK" on Android *is* the device being away.
+- **Idempotence is delete-and-rebuild.** `replace_device_sessions` wipes
+  and re-inserts a device's rows in one transaction, preserving
+  `UNIQUE(device_fk, event_id)`. Runs at collection start and stop, and
+  via `scripts/backfill_sessions.py` for imported databases. Re-runs
+  produce identical rows (verified: 28 app sessions summing 41.8 min
+  against 42 min of measured screen-on on a real Samsung dataset).
+- **Derivation must not read the future.** Head blocks open at the first
+  event when awake before any screen event; a trailing block stays open
+  (`end_ts IS NULL`, duration NULL) until the next run closes it. Windows
+  semantics unchanged — its bridge remains the only write-time producer.

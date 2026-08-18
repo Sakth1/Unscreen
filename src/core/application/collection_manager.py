@@ -269,10 +269,18 @@ class CollectionManager:
         logger.info("Health monitor started")
 
         if self._system_type == OSType.ANDROID:
+            from core.application.session_reconstructor import rebuild_sessions
+
             self._screen_monitor_task = asyncio.create_task(
                 self._monitor_screen_state()
             )
             logger.info("Screen state monitor started")
+            try:
+                rebuild_sessions(self._storage, self._storage.device_id)
+            except Exception:
+                logger.exception(
+                    "Failed to rebuild sessions at startup — sessions may lag events"
+                )
 
         logger.info(
             "Collection started — events will be written to %s",
@@ -310,6 +318,13 @@ class CollectionManager:
             self._screen_monitor_task = None
         await self._scheduler.stop()
         self._event_bridge.finalize_open_sessions(utc_timestamp())
+        if self._system_type == OSType.ANDROID:
+            from core.application.session_reconstructor import rebuild_sessions
+
+            try:
+                rebuild_sessions(self._storage, self._storage.device_id)
+            except Exception:
+                logger.exception("Failed to rebuild sessions at stop")
         self._storage.sync_durable_backup(force=True)
         if self._runtime:
             self._runtime.shutdown()

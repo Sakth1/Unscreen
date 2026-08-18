@@ -112,11 +112,15 @@ payload    TEXT NOT NULL
 One row per `foreground_transition` (the event that **started** the block,
 via `event_id`). The event bridge (Windows) opens a row on every
 foreground write and closes the previous one at the new event's timestamp;
-collection stop closes the last open session. Indexes: `(device_fk,
+collection stop closes the last open session. On Android,
+`session_reconstructor.derive_app_sessions` derives the rows from
+`foreground_transition` + `screen_state_change` (screen-off splits,
+screen-on reopens the last-known app) and `replace_device_sessions`
+rebuilds them at collection start/stop. Indexes: `(device_fk,
 app_key, start_ts)`, `(device_fk, start_ts)`, `UNIQUE(device_fk,
-event_id)`. Android has **no producer** — its `app_sessions` stays empty.
+event_id)`.
 
-### `status_sessions` — Windows idle status blocks (produced at write time, v8)
+### `status_sessions` — status blocks (Windows: idle at write time, v8; Android: screen state, derived)
 ```sql
 id         INTEGER PRIMARY KEY AUTOINCREMENT,
 device_fk  INTEGER NOT NULL REFERENCES devices(id),
@@ -134,6 +138,9 @@ timestamp; collection stop closes the last open block. `idle_transition`
 itself is now written **only on status change** (v8, §3), so a block's
 start is the transition that entered it. Indexes: `(device_fk, start_ts)`,
 `(device_fk, status, start_ts)`, `UNIQUE(device_fk, event_id)`.
+On Android the same table holds `active`/`away` blocks derived from
+`screen_state_change` only (no `idle` — no input-idle signal, ADR-0002);
+`user_presence` stays event-only.
 
 ### `url_visits` — browser navigation log (Windows only, optional)
 ```sql
@@ -446,9 +453,14 @@ the derivation explicit at write time:
 4. **url_visits backfill:** when an app session closes, the bridge stamps
    `url_visits.session_id` for every visit whose `event_id` equals the
    closed session's owning event.
-5. **Android:** no producer. `app_sessions`/`status_sessions` stay empty;
-   serve everything from `raw_events` queries (§5) until a producer
-   exists.
+5. **Android:** a derivation pass
+   (`session_reconstructor.derive_app_sessions` /
+   `derive_status_sessions`) replaces a device's rows at collection
+   start/stop (`replace_device_sessions`, delete-and-rebuild, idempotent):
+   app sessions are split at `screen_state_change` off and re-opened with
+   the last-known app on screen-on; status blocks follow screen state only
+   (`active`/`away`, no `idle`). Backfill imported DBs with
+   `uv run python scripts/backfill_sessions.py <db>`.
 
 ## 7. Gotchas
 
@@ -464,8 +476,10 @@ the derivation explicit at write time:
   Windows while the app is closed — the timeline you build is
   "collection-lived", gaps are data, not corruption.
 - Desktop Windows with no battery → no `power_change` rows at all.
-- `app_sessions` / `status_sessions` are produced **only on Windows**;
-  Android's stay empty. `url_visits.session_id` is backfilled when the
+- `app_sessions` / `status_sessions`: Windows rows are produced at write
+  time by the bridge; Android rows by the derivation pass (idempotent,
+  rebuildable via `scripts/backfill_sessions.py`).
+  `url_visits.session_id` is backfilled when the
   owning app session closes. `url_visits.event_id` **is** populated at
   write time since v7.
 - Duplicate writes are **not** silent failures: an exact `raw_events`

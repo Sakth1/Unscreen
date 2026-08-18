@@ -50,9 +50,9 @@ class Tick:
 | `foreground` (Windows) | 2s | `{app, title}` + optional `url_visit` attachment |
 | `afk` | 5s | `{status: "active"\|"idle"\|"away", idle_seconds}` |
 | `power` | 60s | `{battery_pct, charging}` |
-| `android_foreground` | 5s | `{package}` |
+| `android_foreground` | 10s | `{package, app_name}` |
 | `android_app_usage` | 60s | `{intervals: [{package, start, end, ...}]}` (fan-out into one event per interval) |
-| `android_afk` | 30s | `{present}` → `user_presence` |
+| `android_afk` | 5s | `{present}` → `user_presence` |
 | `android_power` | 60s | `{battery_pct, charging}` |
 
 Browser info never lands in the `foreground_transition` payload. When the foreground window is a known browser (Chrome, Firefox, Edge, Brave, Opera, Vivaldi) and URL extraction is enabled (default: on), the collector attaches a `url_visit` dict — `{url, browser, scheme, host, domain, path, extraction_method, confidence, is_trackable}` — to the tick on URL changes only. The event bridge persists it into the `url_visits` table, owned by the `foreground_transition` event that started the browser session (a fresh event on app change, the cached owning event on tab change). When extraction fails, the title-inference fallback is recorded as a `url_visit` with `confidence="low"` instead of polluting the event payload. Non-trackable URLs (`about:blank`, `chrome://newtab`, …) are filtered out.
@@ -61,7 +61,7 @@ Browser info never lands in the `foreground_transition` payload. When the foregr
 
 **Location:** `%APPDATA%\Unscreen\data.db`
 
-**Engine:** SQLite (stdlib `sqlite3`), WAL journal mode. Schema v7 (`PRAGMA user_version = 7`).
+**Engine:** SQLite (stdlib `sqlite3`), WAL journal mode. Schema v8 (`PRAGMA user_version = 8`).
 
 All devices share one set of tables — no per-device tables. Device identity lives **once** in `devices`; event rows reference it by a small integer FK. Timestamps are **integer milliseconds** (Unix epoch UTC).
 
@@ -105,9 +105,9 @@ CREATE TABLE IF NOT EXISTS raw_events (
 
 `UNIQUE(device_fk, event_type_fk, timestamp, payload_hash)` makes sync re-imports idempotent: Android's same-millisecond `app_usage_interval` fan-out is admitted (distinct payloads → distinct hashes), identical re-imports are rejected.
 
-### `app_sessions` — derived app sessions (Windows, produced at write time)
+### `app_sessions` — derived app sessions (Windows: write time; Android: derivation pass)
 
-One row per `foreground_transition` (referenced by `event_id`). The event bridge opens the row at write time and closes it at the next transition's start (`end_ts`, `duration_s`); collection stop closes the last one. Android has no producer yet.
+One row per app-session boundary (referenced by `event_id`). **Windows:** the event bridge opens the row at write time and closes it at the next `foreground_transition`'s start (`end_ts`, `duration_s`); collection stop closes the last one. **Android:** `session_reconstructor.derive_app_sessions` derives rows from `foreground_transition` events, splitting at `screen_state_change` off; a screen-on without a transition reopens the last-known app. Android rows are rebuilt on collection start/stop (and via `scripts/backfill_sessions.py`); both producers are idempotent.
 
 ```sql
 CREATE TABLE IF NOT EXISTS app_sessions (
@@ -122,9 +122,9 @@ CREATE TABLE IF NOT EXISTS app_sessions (
 );
 ```
 
-### `status_sessions` — Windows idle status blocks (produced at write time)
+### `status_sessions` — status blocks (Windows: idle; Android: screen state)
 
-One row per `idle_transition` entry (every status, including `active`), opened at write time and closed at the next entry or on collection stop.
+**Windows:** one row per `idle_transition` entry (every status, including `active`), opened at write time and closed at the next entry or on collection stop. **Android:** `derive_status_sessions` derives `active`/`away` blocks from `screen_state_change` only — no idle status (Android has no input-idle signal, ADR-0002). Both producers are idempotent.
 
 ```sql
 CREATE TABLE IF NOT EXISTS status_sessions (
