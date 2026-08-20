@@ -312,4 +312,33 @@ class TestDataSection:
         release.set()
         await first
         await second
-        assert _texts(section) == ["data"]
+
+    @pytest.mark.asyncio
+    async def test_run_without_placeholder_keeps_content_while_loading(self):
+        started = asyncio.Event()
+        release = asyncio.Event()
+        phase = {"n": 0}
+
+        async def load():
+            phase["n"] += 1
+            if phase["n"] == 1:
+                return "data"
+            started.set()
+            await release.wait()
+            return "fresh"
+
+        section = DataSection(
+            load=load,
+            content=lambda d: ft.Text(f"data={d}"),
+            skeleton=status_card_skeleton(),
+        )
+        await section.run()
+        assert _texts(section) == ["data=data"]
+
+        task = asyncio.create_task(section.run(show_placeholder=False))
+        await started.wait()
+        assert _texts(section) == ["data=data"]
+        assert not any(isinstance(c, ft.Shimmer) for c in _walk(section))
+        release.set()
+        await task
+        assert _texts(section) == ["data=fresh"]

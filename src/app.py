@@ -214,6 +214,7 @@ class App:
 
         self._initiate()
         self.status_bar.start_refresh(self.page)
+        self.dashboard_page.start_refresh(self.page)
         self.route_manager.navigate(self.route_manager.current_route)
 
     def _set_window_icon(self) -> None:
