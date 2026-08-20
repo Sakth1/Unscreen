@@ -47,6 +47,32 @@ DOMAIN_KEYWORDS = [
     (r"\bwikipedia\b", "wikipedia.org"),
 ]
 
+#: Display names for the normalized sites matched by ``DOMAIN_KEYWORDS``;
+#: used by the dashboard to give known sites their own top-apps entry
+#: instead of fragmenting the browser across every page title (F8).
+SITE_NAMES = {
+    "youtube.com": "YouTube",
+    "github.com": "GitHub",
+    "reddit.com": "Reddit",
+    "stackoverflow.com": "Stack Overflow",
+    "stackexchange.com": "Stack Exchange",
+    "twitter.com": "Twitter",
+    "x.com": "X",
+    "linkedin.com": "LinkedIn",
+    "google.com": "Google",
+    "facebook.com": "Facebook",
+    "instagram.com": "Instagram",
+    "amazon.com": "Amazon",
+    "netflix.com": "Netflix",
+    "spotify.com": "Spotify",
+    "discord.com": "Discord",
+    "whatsapp.com": "WhatsApp",
+    "chatgpt.com": "ChatGPT",
+    "notion.so": "Notion",
+    "medium.com": "Medium",
+    "wikipedia.org": "Wikipedia",
+}
+
 
 @dataclass
 class BrowserInfo:

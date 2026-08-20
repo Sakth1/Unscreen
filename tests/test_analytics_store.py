@@ -245,7 +245,10 @@ class TestAppNameResolution:
         _seed_session(
             in_memory_db, "chrome.exe", {"app": "chrome.exe"}, now, now + 1000, 1.0
         )
-        assert AnalyticsStore(in_memory_db).daily_totals()[0].app_name == "Chrome"
+        total = AnalyticsStore(in_memory_db).daily_totals()[0]
+        # F8: an unrecognized browser session rolls into the general bucket.
+        assert total.app_name == "Browser"
+        assert total.app_key == "browser"
 
     def test_windows_generic_exe_stripped(self, in_memory_db):
         now = day_start_ms(get_current_time_ms())
@@ -320,7 +323,7 @@ class TestSystemAppFilter:
             60.0,
         )
         totals = AnalyticsStore(in_memory_db).daily_totals()
-        assert [t.app_key for t in totals] == ["chrome.exe"]
+        assert [t.app_key for t in totals] == ["browser"]
 
     def test_share_recomputed_over_visible_apps(self, in_memory_db):
         now = day_start_ms(get_current_time_ms())
@@ -369,3 +372,87 @@ class TestSystemAppFilter:
         _seed_session(in_memory_db, "MYAPP.EXE", {}, now, now + 60_000, 60.0)
         store = AnalyticsStore(in_memory_db, hidden_app_keys=("myapp.exe",))
         assert store.daily_totals() == []
+
+
+class TestBrowserSiteBucketing:
+    """F8: browser sessions bucket by normalized site, not page title."""
+
+    @staticmethod
+    def _seed_browser(storage, exe: str, title: str, start_ms: int, dur_s: float):
+        _seed_session(
+            storage,
+            exe,
+            {"app": exe, "title": title},
+            start_ms,
+            start_ms + int(dur_s * 1000),
+            dur_s,
+        )
+
+    def test_sites_get_their_own_entries(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        self._seed_browser(in_memory_db, "brave.exe", "YouTube - Brave", now, 60.0)
+        self._seed_browser(
+            in_memory_db, "brave.exe", "GitHub - Brave", now + 1_000, 30.0
+        )
+        self._seed_browser(in_memory_db, "brave.exe", "Untitled", now + 2_000, 10.0)
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert [(t.app_name, t.total_s) for t in totals] == [
+            ("YouTube", 60.0),
+            ("GitHub", 30.0),
+            ("Browser", 10.0),
+        ]
+        assert totals[0].share_pct == 60.0
+        assert totals[1].share_pct == 30.0
+
+    def test_same_site_merges_across_browsers(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        self._seed_browser(in_memory_db, "brave.exe", "YouTube - Brave", now, 60.0)
+        self._seed_browser(
+            in_memory_db, "chrome.exe", "YouTube - Chrome", now + 1_000, 40.0
+        )
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert len(totals) == 1
+        assert totals[0].app_name == "YouTube"
+        assert totals[0].total_s == 100.0
+        assert totals[0].share_pct == 100.0
+
+    def test_unrecognized_titles_merge_into_one_browser_entry(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        self._seed_browser(in_memory_db, "brave.exe", "Article one - Brave", now, 20.0)
+        self._seed_browser(
+            in_memory_db, "brave.exe", "Article two - Brave", now + 1_000, 30.0
+        )
+        self._seed_browser(in_memory_db, "brave.exe", "New Tab", now + 2_000, 5.0)
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert [(t.app_name, t.total_s) for t in totals] == [("Browser", 55.0)]
+
+    def test_browser_without_title_buckets_to_browser(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        _seed_session(
+            in_memory_db, "firefox.exe", {"app": "firefox.exe"}, now, now + 1_000, 1.0
+        )
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert totals[0].app_name == "Browser"
+
+    def test_limit_applied_after_bucketing(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        self._seed_browser(in_memory_db, "brave.exe", "YouTube - Brave", now, 60.0)
+        self._seed_browser(
+            in_memory_db, "brave.exe", "GitHub - Brave", now + 1_000, 30.0
+        )
+        self._seed_browser(in_memory_db, "brave.exe", "Untitled", now + 2_000, 10.0)
+        _seed_session(in_memory_db, "app.exe", {}, now + 3_000, now + 8_000, 5.0)
+        totals = AnalyticsStore(in_memory_db).daily_totals(limit=2)
+        assert [(t.app_name, t.total_s) for t in totals] == [
+            ("YouTube", 60.0),
+            ("GitHub", 30.0),
+        ]
+
+    def test_non_browser_apps_untouched(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        _seed_session(
+            in_memory_db, "notepad.exe", {"app": "notepad.exe"}, now, now + 60_000, 60.0
+        )
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert totals[0].app_name == "notepad"
+        assert totals[0].app_key == "notepad.exe"
