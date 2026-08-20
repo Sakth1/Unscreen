@@ -3,7 +3,6 @@
   "known": [
     "UI.routing.RouteManager.view_for:AttributeError",
     "core.collectors.windows.browser.analyze:AttributeError",
-    "core.storage.Storage.get_today_top_apps:OverflowError",
     "core.update_checker.UpdateChecker:AttributeError",
     "core.url_processor.UrlProcessor.normalize:AttributeError",
     "utils.net.is_trackable_url:AttributeError",

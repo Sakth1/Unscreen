@@ -21,6 +21,18 @@ def day_start_ms(now_ms: int) -> int:
         return now_ms
 
 
+def week_start_ms(now_ms: int) -> int:
+    """Local midnight of the Monday of the ISO week containing ``now_ms``."""
+    try:
+        local_dt = datetime.datetime.fromtimestamp(now_ms / _MS_PER_S)
+        monday = local_dt - datetime.timedelta(days=local_dt.weekday())
+        monday_midnight = monday.replace(hour=0, minute=0, second=0, microsecond=0)
+        return int(monday_midnight.timestamp() * _MS_PER_S)
+    except (OSError, OverflowError, ValueError):
+        logger.debug("Failed to compute week start for %d, defaulting to now", now_ms)
+        return now_ms
+
+
 def fmt_timestamp(ts: int) -> str:
     """Format a Unix epoch milliseconds timestamp in local time with tz offset."""
     try:

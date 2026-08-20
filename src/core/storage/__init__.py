@@ -690,6 +690,56 @@ class Storage:
             for r in self._conn.execute(sql, params).fetchall()
         ]
 
+    def get_app_session_totals(
+        self,
+        since_ms: int,
+        until_ms: int,
+        device_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Aggregate closed app-session durations in ``[since_ms, until_ms)``.
+
+        Sessions are assigned to the range by their ``start_ts`` (a session
+        crossing a boundary counts entirely on its start day). Open sessions
+        (``duration_s`` NULL) are excluded. Returns rows grouped by
+        ``(app_key, payload)`` sorted by total duration descending; each row
+        carries ``grand_total_s`` — the sum over *all* groups in range
+        (before ``LIMIT``) — so callers can compute share percentages
+        against the full range, not just the top-N slice.
+        """
+        filters: list[str] = [
+            "s.start_ts >= ?",
+            "s.start_ts < ?",
+            "s.duration_s IS NOT NULL",
+        ]
+        params: list = [since_ms, until_ms]
+        if device_id:
+            filters.append("d.device_id = ?")
+            params.append(device_id)
+
+        sql = (
+            "SELECT s.app_key, s.payload, SUM(s.duration_s) AS total_s,"
+            " SUM(SUM(s.duration_s)) OVER () AS grand_total_s"
+            " FROM app_sessions s"
+            " JOIN devices d ON d.id = s.device_fk"
+            " WHERE "
+            + " AND ".join(filters)
+            + " GROUP BY s.app_key, s.payload"
+            + " ORDER BY total_s DESC"
+        )
+        if limit is not None:
+            sql += f" LIMIT {int(limit)}"
+
+        return [
+            {
+                "app_key": r[0],
+                "payload": json.loads(r[1]),
+                "total_s": float(r[2]),
+                "grand_total_s": float(r[3]),
+            }
+            for r in self._conn.execute(sql, params).fetchall()
+        ]
+
     def open_status_session(
         self, event_id: int, start_ts: int, status: str, payload: dict
     ) -> int:
@@ -894,19 +944,6 @@ class Storage:
             (session_id, event_id),
         )
 
-    def get_today_seconds(self) -> float:
-        today_start = (
-            datetime.now(timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp()
-            * 1000
-        )
-        row = self._conn.execute(
-            "SELECT COALESCE(SUM(duration_s), 0) FROM app_sessions WHERE start_ts >= ? AND duration_s IS NOT NULL",
-            (today_start,),
-        ).fetchone()
-        return float(row[0])
-
     def count_events(
         self,
         event_type: str | None = None,
@@ -952,24 +989,6 @@ class Storage:
         if row is None:
             return None
         return json.loads(row[0])
-
-    def get_today_top_apps(self, limit: int = 5) -> list[dict]:
-        today_start = (
-            datetime.now(timezone.utc)
-            .replace(hour=0, minute=0, second=0, microsecond=0)
-            .timestamp()
-            * 1000
-        )
-        rows = self._conn.execute(
-            """SELECT app_key, SUM(duration_s) as total_s
-               FROM app_sessions
-               WHERE start_ts >= ? AND duration_s IS NOT NULL
-               GROUP BY app_key
-               ORDER BY total_s DESC
-               LIMIT ?""",
-            (today_start, limit),
-        ).fetchall()
-        return [{"app_key": r[0], "duration_s": r[1]} for r in rows]
 
     def clear_all_data(self) -> None:
         self._conn.execute("DELETE FROM url_visits")

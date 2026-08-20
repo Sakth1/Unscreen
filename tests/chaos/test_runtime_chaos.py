@@ -289,8 +289,6 @@ def test_corrupt_payloads_survive_every_query(in_memory_db) -> None:
     queries = [
         in_memory_db.get_raw_events,
         in_memory_db.get_latest_battery,
-        in_memory_db.get_today_seconds,
-        in_memory_db.get_today_top_apps,
         in_memory_db.count_events,
         in_memory_db.get_url_visits,
         in_memory_db.get_app_sessions,

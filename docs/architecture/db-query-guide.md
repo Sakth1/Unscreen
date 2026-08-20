@@ -294,14 +294,13 @@ s.get_raw_events(source="android_afk")
 s.get_raw_events()                        # everything, ascending
 s.get_latest_battery()                    # newest power_change payload or None
 s.get_url_visits(since=..., until=...)
-s.get_today_seconds()                     # SUM(duration_s) of app_sessions today
-s.get_today_top_apps(5)                   # app_sessions GROUP BY app_key today
 s.count_events(since=..., until=..., event_type=...)  # cheap COUNT(*) (0.4.9)
 s.open_app_session(event_id, start_ts, app_key, payload)  # insert open session (bridge)
 s.close_app_session(event_id, end_ts)  # close: returns rowid or None (0.4.10)
 s.backfill_url_sessions_for_event(event_id, session_id)  # stamp visits of a closed session
 s.get_app_sessions(app_key=..., device_id=..., since=..., until=...,
                    platform=..., limit=...)             # app sessions as dicts
+s.get_app_session_totals(since, until, device_id=..., limit=...)  # GROUP BY (app_key, payload)
 s.open_status_session(event_id, start_ts, status, payload)  # insert open status block
 s.close_status_session(event_id, end_ts)  # close: returns rowid or None
 s.get_status_sessions(status=..., device_id=..., since=..., until=...,
@@ -312,6 +311,27 @@ All methods return dicts with `payload` parsed back to a `dict`, and
 `device_id` / `platform` / `event_type` / `source` re-joined from the
 dictionary tables (the API shape is unchanged from v6 — only the storage
 layout changed). **Timestamps are integer milliseconds everywhere.**
+
+### Via AnalyticsStore (per-app totals — the dashboard / analytics read path)
+
+`AnalyticsStore` (issue #26, `core/analytics`) answers "how much time did
+I spend in each app today / this week?". It runs on SQLite, not DuckDB —
+see ADR-0004. Ranges are local-time; sessions are assigned by `start_ts`;
+open sessions (no `end_ts`) are excluded until closed.
+
+```python
+from core.analytics import ALL_DEVICES, AnalyticsStore
+
+store = AnalyticsStore(Storage())
+store.daily_totals()                 # today, current device
+store.daily_totals(date(2026, 8, 20))
+store.weekly_totals()                # ISO week (Mon-Sun), current device
+store.weekly_totals(date(2026, 8, 20))
+store.totals(since_ms, until_ms)              # arbitrary range
+store.totals(since_ms, until_ms, limit=5)     # top 5 (share% still vs full range)
+store.totals(since_ms, until_ms, device_id=ALL_DEVICES)  # across every device
+# each entry: .app_key, .app_name, .total_s (seconds), .share_pct
+```
 
 ### Raw SQL (the workhorse queries)
 
