@@ -166,7 +166,6 @@ class DataDiagnostics(ft.Container):
         if self._collection_manager is None:
             self._toast("Collection services unavailable")
             return
-        runner = self._page.run_task if self._page is not None else None
         section = DataSection(
             load=lambda: self._export_data(csv_format),
             content=lambda path: ft.Text(
@@ -183,11 +182,14 @@ class DataDiagnostics(ft.Container):
                 compact=True,
             ),
             error_message="Export failed",
-            runner=runner,
         )
         self._export_status.controls = [section]
         safe_update(self)
-        spawn(section.run(), runner=runner)
+        page = self._page
+        if page is not None:
+            page.run_task(section.run)
+        else:
+            spawn(section.run())
 
     def _export_data(self, csv_format: bool) -> str | None:
         """Read events and write the export file; ``None`` when empty."""

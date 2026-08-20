@@ -29,10 +29,13 @@ _Runner = Callable[[Awaitable[Any]], Any]
 def spawn(coro: Awaitable[Any], runner: Optional[_Runner] = None) -> None:
     """Run ``coro`` via the page runner, the current loop, or a fresh loop.
 
-    ``runner`` is the page's ``run_task`` (used when the section is hosted
-    in a live page). Without a runner the coroutine is scheduled on the
-    running loop, or executed with a fresh loop when none exists (headless
-    tests).
+    ``runner`` receives an *awaitable* (it may be the loop's ``create_task``
+    or a test spy). flet's ``page.run_task`` must NOT be passed here: it
+    schedules coroutine *functions* (``handler(*args)``) and raises
+    ``TypeError`` on coroutine objects — call ``page.run_task(handler,
+    *args)`` directly instead. Without a runner the coroutine is scheduled
+    on the running loop, or executed with a fresh loop when none exists
+    (headless tests).
     """
     if runner is not None:
         runner(coro)
@@ -98,12 +101,16 @@ class ErrorBoundary(ft.Column):
         if placeholder is not None:
             self.controls = [placeholder]
 
-    async def run(self) -> None:
-        """Run (or re-run) the load and render content or the error card."""
+    async def run(self, show_placeholder: bool = True) -> None:
+        """Run (or re-run) the load and render content or the error card.
+
+        ``show_placeholder`` swaps in the loading placeholder first; pass
+        ``False`` to refresh in place (no skeleton flash on periodic reloads).
+        """
         if self._running:
             return
         self._running = True
-        if self._placeholder is not None:
+        if show_placeholder and self._placeholder is not None:
             self._show(self._placeholder)
         try:
             result = self._load()
