@@ -160,13 +160,24 @@ class TestTotals:
         assert totals[0].share_pct == 60.0
         assert totals[1].share_pct == 30.0
 
-    def test_open_sessions_excluded(self, in_memory_db):
-        now = day_start_ms(get_current_time_ms())
-        _seed_session(in_memory_db, "closed", {}, now, now + 60_000, 60.0)
-        _seed_session(in_memory_db, "open", {}, now, None, None)
+    def test_open_sessions_counted_up_to_now(self, in_memory_db):
+        now = get_current_time_ms()
+        today_start = day_start_ms(now)
+        _seed_session(
+            in_memory_db, "closed", {}, today_start, today_start + 60_000, 60.0
+        )
+        _seed_session(in_memory_db, "open", {}, today_start + 5_000, None, None)
         totals = AnalyticsStore(in_memory_db).daily_totals()
-        assert [t.app_key for t in totals] == ["closed"]
-        assert totals[0].share_pct == 100.0
+        expected_open = (now - (today_start + 5_000)) / 1000.0
+        assert totals[0].app_key == "open"
+        assert totals[0].total_s == pytest.approx(expected_open, abs=1.0)
+        assert totals[1].app_key == "closed"
+
+    def test_open_session_starting_in_future_is_excluded(self, in_memory_db):
+        """An open session that cannot have started yet must not count."""
+        now = get_current_time_ms()
+        _seed_session(in_memory_db, "future", {}, now + 60_000, None, None)
+        assert AnalyticsStore(in_memory_db).daily_totals() == []
 
     def test_empty_range(self, in_memory_db):
         assert (
@@ -176,7 +187,9 @@ class TestTotals:
     def test_all_open_sessions_empty(self, in_memory_db):
         now = day_start_ms(get_current_time_ms())
         _seed_session(in_memory_db, "open", {}, now, None, None)
-        assert AnalyticsStore(in_memory_db).daily_totals() == []
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert totals  # the only session is open — it counts up to now
+        assert totals[0].app_key == "open"
 
     def test_totals_requires_start_before_until(self, in_memory_db):
         now = day_start_ms(get_current_time_ms())
@@ -268,3 +281,91 @@ class TestAppNameResolution:
         totals = AnalyticsStore(in_memory_db).daily_totals(device_id=ALL_DEVICES)
         assert [t.app_key for t in totals] == ["com.a"]
         assert totals[0].total_s == 2.0
+
+
+class TestSystemAppFilter:
+    def test_system_apps_hidden_by_default(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        _seed_session(
+            in_memory_db,
+            "com.sec.android.app.launcher",
+            {"package": "com.sec.android.app.launcher"},
+            now,
+            now + 60_000,
+            60.0,
+        )
+        _seed_session(
+            in_memory_db,
+            "com.instagram.android",
+            {"package": "com.instagram.android"},
+            now + 5_000,
+            now + 25_000,
+            20.0,
+        )
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert [t.app_key for t in totals] == ["com.instagram.android"]
+        assert totals[0].share_pct == 100.0
+
+    def test_windows_system_process_hidden(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        _seed_session(
+            in_memory_db, "dwm.exe", {"app": "dwm.exe"}, now, now + 60_000, 60.0
+        )
+        _seed_session(
+            in_memory_db,
+            "chrome.exe",
+            {"app": "chrome.exe"},
+            now + 5_000,
+            now + 65_000,
+            60.0,
+        )
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert [t.app_key for t in totals] == ["chrome.exe"]
+
+    def test_share_recomputed_over_visible_apps(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        _seed_session(
+            in_memory_db,
+            "com.sec.android.app.launcher",
+            {"package": "com.sec.android.app.launcher"},
+            now,
+            now + 60_000,
+            60.0,
+        )
+        _seed_session(in_memory_db, "a", {}, now + 5_000, now + 35_000, 30.0)
+        _seed_session(in_memory_db, "b", {}, now + 6_000, now + 16_000, 10.0)
+        totals = AnalyticsStore(in_memory_db).daily_totals()
+        assert [t.app_key for t in totals] == ["a", "b"]
+        assert totals[0].share_pct == 75.0
+        assert totals[1].share_pct == 25.0
+
+    def test_disabled_filter_keeps_system_apps(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        _seed_session(
+            in_memory_db,
+            "com.sec.android.app.launcher",
+            {"package": "com.sec.android.app.launcher"},
+            now,
+            now + 60_000,
+            60.0,
+        )
+        store = AnalyticsStore(in_memory_db, exclude_system_apps=False)
+        totals = store.daily_totals()
+        assert [t.app_key for t in totals] == ["com.sec.android.app.launcher"]
+
+    def test_hidden_app_keys_extend_the_curated_list(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        _seed_session(in_memory_db, "com.example.myapp", {}, now, now + 60_000, 60.0)
+        _seed_session(
+            in_memory_db, "com.example.keepme", {}, now + 5_000, now + 35_000, 30.0
+        )
+        store = AnalyticsStore(in_memory_db, hidden_app_keys=("com.example.myapp",))
+        totals = store.daily_totals()
+        assert [t.app_key for t in totals] == ["com.example.keepme"]
+        assert totals[0].share_pct == 100.0
+
+    def test_hidden_app_keys_case_insensitive(self, in_memory_db):
+        now = day_start_ms(get_current_time_ms())
+        _seed_session(in_memory_db, "MYAPP.EXE", {}, now, now + 60_000, 60.0)
+        store = AnalyticsStore(in_memory_db, hidden_app_keys=("myapp.exe",))
+        assert store.daily_totals() == []

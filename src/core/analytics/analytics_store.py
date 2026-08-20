@@ -4,16 +4,25 @@
 ``core.storage``) and answers the milestone #26 question: how much time
 did I spend in each app today / this week? All ranges are local-time
 boundaries; sessions are assigned to a range by their ``start_ts`` and
-open sessions (no ``end_ts`` yet) are excluded until closed.
+open sessions (no ``end_ts`` yet) are counted up to the moment the query
+runs — an in-progress session is real usage, not silence.
 
-The store is platform-agnostic by design (ADR-0004): the same SQLite
-query path runs on Windows and Android.
+System apps (launcher, shell, IMEs — see ``core.application.system_apps``)
+are excluded from the totals by default (F6) so shares reflect real usage;
+``hidden_app_keys`` extends the curated list. The store is
+platform-agnostic by design (ADR-0004): the same SQLite query path runs
+on Windows and Android.
 """
 
 import datetime
 import logging
 from dataclasses import dataclass
 
+from core.application.system_apps import (
+    PLATFORM_ANDROID,
+    PLATFORM_WINDOWS,
+    effective_system_keys,
+)
 from core.collectors.windows.browser import BROWSER_PROCESSES
 from utils.time_utils import get_current_time_ms, week_start_ms
 
@@ -53,8 +62,15 @@ def _app_name(app_key: str, payload: dict | None) -> str:
 class AnalyticsStore:
     """Aggregate app-session durations over local-time ranges."""
 
-    def __init__(self, storage):
+    def __init__(
+        self,
+        storage,
+        exclude_system_apps: bool = True,
+        hidden_app_keys: tuple[str, ...] = (),
+    ):
         self._storage = storage
+        self._exclude_system_apps = exclude_system_apps
+        self._hidden_app_keys = tuple(hidden_app_keys)
 
     def totals(
         self,
@@ -68,13 +84,27 @@ class AnalyticsStore:
         ``device_id`` defaults to the current device; pass ``ALL_DEVICES``
         to aggregate across every device. ``limit`` caps the returned rows
         (top-N); ``share_pct`` is still computed against the full range.
-        Returns an empty list when the range has no tracked time.
+        System apps are excluded by default (F6); ``share_pct`` reflects
+        the visible (post-filter) total. Returns an empty list when the
+        range has no tracked time.
         """
         scope = (
             None if device_id == ALL_DEVICES else device_id or self._storage.device_id
         )
+        exclude_keys = None
+        if self._exclude_system_apps:
+            # Both platform sets are disjoint in practice, so the union is
+            # safe for a single-device scope and for ALL_DEVICES alike.
+            exclude_keys = effective_system_keys(
+                (PLATFORM_ANDROID, PLATFORM_WINDOWS), self._hidden_app_keys
+            )
         rows = self._storage.get_app_session_totals(
-            since_ms, until_ms, device_id=scope, limit=limit
+            since_ms,
+            until_ms,
+            device_id=scope,
+            limit=limit,
+            now_ms=get_current_time_ms(),
+            exclude_keys=exclude_keys,
         )
         if not rows:
             return []

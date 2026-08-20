@@ -17,6 +17,7 @@ import datetime
 import flet as ft
 
 from core.analytics import AnalyticsStore, AppTotal
+from core.config_manager import ConfigManager
 from core.storage import Storage
 from UI.components.card_section import CardSection
 from UI.components.data_section import DataSection
@@ -110,7 +111,13 @@ class DashboardSummaryCard(CardSection):
 
     def _lazy_store(self) -> AnalyticsStore:
         if self._store is None:
-            self._store = AnalyticsStore(Storage())
+            config = ConfigManager()
+            config.load()
+            self._store = AnalyticsStore(
+                Storage(close_orphans=False),
+                exclude_system_apps=config.hide_system_apps,
+                hidden_app_keys=tuple(config.hidden_app_keys),
+            )
         return self._store
 
     def _load(self) -> list[AppTotal]:

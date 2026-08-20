@@ -50,7 +50,12 @@ def _payload_hash(payload: dict) -> int:
 class Storage:
     _TEST_DEVICE_ID = "00000000-0000-0000-0000-000000000001"
 
-    def __init__(self, db_path: str | None = None):
+    def __init__(
+        self,
+        db_path: str | None = None,
+        *,
+        close_orphans: bool = True,
+    ):
         self._device_id = get_device_id()
         self._short_id = self._device_id[:8]
         self._platform = "android" if is_android() else platform.system().lower()
@@ -82,7 +87,8 @@ class Storage:
             self._run_migrations()
             self._register_device()
             self._device_fk = self._resolve_device_fk(self._device_id)
-            self.close_orphaned_sessions(utc_timestamp())
+            if close_orphans:
+                self.close_orphaned_sessions(utc_timestamp())
             self._run_startup_health_checks()
             self._log_storage_info()
         except sqlite3.DatabaseError as exc:
@@ -612,6 +618,22 @@ class Storage:
                         json.dumps(row["payload"], sort_keys=True, ensure_ascii=True),
                     ),
                 )
+            # Re-point url_visits at the freshly inserted app_sessions rows.
+            # Row ids change on re-insert, so any session_id stamped by the
+            # Windows write-time bridge would otherwise dangle after a rebuild.
+            self._conn.execute(
+                """UPDATE url_visits
+                   SET session_id = (
+                       SELECT s.id FROM app_sessions s
+                       WHERE s.device_fk = ? AND s.event_id = url_visits.event_id
+                   )
+                   WHERE url_visits.device_fk = ?
+                     AND EXISTS (
+                         SELECT 1 FROM app_sessions s
+                         WHERE s.device_fk = ? AND s.event_id = url_visits.event_id
+                     )""",
+                (device_fk, device_fk, device_fk),
+            )
             self._conn.execute("COMMIT")
         except Exception:
             self._conn.execute("ROLLBACK")
@@ -696,30 +718,55 @@ class Storage:
         until_ms: int,
         device_id: str | None = None,
         limit: int | None = None,
+        now_ms: int | None = None,
+        exclude_keys: set[str] | None = None,
     ) -> list[dict]:
-        """Aggregate closed app-session durations in ``[since_ms, until_ms)``.
+        """Aggregate app-session durations in ``[since_ms, until_ms)``.
 
         Sessions are assigned to the range by their ``start_ts`` (a session
         crossing a boundary counts entirely on its start day). Open sessions
-        (``duration_s`` NULL) are excluded. Returns rows grouped by
+        (``end_ts`` NULL) are excluded by default; pass ``now_ms`` to count
+        them up to ``min(now_ms, until_ms)`` — an in-progress session is
+        real usage, not silence. ``exclude_keys`` drops sessions whose
+        app key matches (case-insensitively) — used by the dashboard to
+        hide system apps (launcher, shell, IMEs...). Returns rows grouped by
         ``(app_key, payload)`` sorted by total duration descending; each row
         carries ``grand_total_s`` — the sum over *all* groups in range
         (before ``LIMIT``) — so callers can compute share percentages
         against the full range, not just the top-N slice.
         """
-        filters: list[str] = [
-            "s.start_ts >= ?",
-            "s.start_ts < ?",
-            "s.duration_s IS NOT NULL",
-        ]
-        params: list = [since_ms, until_ms]
+        eff_end = min(now_ms, until_ms) if now_ms is not None else None
+
+        if eff_end is not None:
+            duration_expr = (
+                "SUM(CASE WHEN s.duration_s IS NOT NULL THEN s.duration_s"
+                " ELSE (? - s.start_ts) / 1000.0 END)"
+            )
+            params: list = [eff_end, eff_end]  # total_s CASE + grand_total CASE
+        else:
+            duration_expr = "SUM(s.duration_s)"
+            params = []
+
+        filters: list[str] = ["s.start_ts >= ?", "s.start_ts < ?"]
+        params += [since_ms, until_ms]
         if device_id:
             filters.append("d.device_id = ?")
             params.append(device_id)
+        if eff_end is not None:
+            filters.append("(s.duration_s IS NOT NULL OR s.start_ts < ?)")
+            params.append(eff_end)
+        else:
+            filters.append("s.duration_s IS NOT NULL")
+        if exclude_keys:
+            filters.append(
+                "lower(s.app_key) NOT IN (" + ",".join("?" * len(exclude_keys)) + ")"
+            )
+            params += sorted(exclude_keys)
 
         sql = (
-            "SELECT s.app_key, s.payload, SUM(s.duration_s) AS total_s,"
-            " SUM(SUM(s.duration_s)) OVER () AS grand_total_s"
+            "SELECT s.app_key, s.payload,"
+            f" {duration_expr} AS total_s,"
+            f" SUM({duration_expr}) OVER () AS grand_total_s"
             " FROM app_sessions s"
             " JOIN devices d ON d.id = s.device_fk"
             " WHERE "
@@ -971,6 +1018,25 @@ class Storage:
         sql = (
             "SELECT COUNT(*) FROM raw_events e"
             " JOIN event_types et ON et.id = e.event_type_fk"
+        )
+        if filters:
+            sql += " WHERE " + " AND ".join(filters)
+        return int(self._conn.execute(sql, params).fetchone()[0])
+
+    def max_event_id(self, device_id: str | None = None) -> int:
+        """Highest ``raw_events`` row id for ``device_id`` (0 when empty).
+
+        Lets the periodic session rebuild skip its work when no new events
+        arrived since the last pass.
+        """
+        filters: list[str] = []
+        params: list = []
+        if device_id:
+            filters.append("d.device_id = ?")
+            params.append(device_id)
+        sql = (
+            "SELECT COALESCE(MAX(e.id), 0) FROM raw_events e"
+            " JOIN devices d ON d.id = e.device_fk"
         )
         if filters:
             sql += " WHERE " + " AND ".join(filters)
