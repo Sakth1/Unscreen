@@ -9,13 +9,16 @@ runs — an in-progress session is real usage, not silence.
 
 System apps (launcher, shell, IMEs — see ``core.application.system_apps``)
 are excluded from the totals by default (F6) so shares reflect real usage;
-``hidden_app_keys`` extends the curated list. The store is
-platform-agnostic by design (ADR-0004): the same SQLite query path runs
-on Windows and Android.
+``hidden_app_keys`` extends the curated list. Browser sessions are
+bucketed by normalized site (F8): recognized sites get their own entry
+(YouTube, GitHub, ...), everything else merges into a general "Browser"
+entry. The store is platform-agnostic by design (ADR-0004): the same
+SQLite query path runs on Windows and Android.
 """
 
 import datetime
 import logging
+import re
 from dataclasses import dataclass
 
 from core.application.system_apps import (
@@ -23,7 +26,11 @@ from core.application.system_apps import (
     PLATFORM_WINDOWS,
     effective_system_keys,
 )
-from core.collectors.windows.browser import BROWSER_PROCESSES
+from core.collectors.windows.browser import (
+    BROWSER_PROCESSES,
+    DOMAIN_KEYWORDS,
+    SITE_NAMES,
+)
 from utils.time_utils import get_current_time_ms, week_start_ms
 
 logger = logging.getLogger(__name__)
@@ -59,6 +66,46 @@ def _app_name(app_key: str, payload: dict | None) -> str:
     return name
 
 
+def _is_browser_session(app_key: str, payload: dict | None) -> bool:
+    """True when the session belongs to a tracked browser process (F8)."""
+    candidate = (payload or {}).get("app") or app_key
+    return candidate.lower() in BROWSER_PROCESSES
+
+
+def _browser_site(payload: dict | None) -> str | None:
+    """The normalized site name a browser session was on, if recognizable.
+
+    Matches the page title (e.g. "YouTube — Brave") against the curated
+    ``DOMAIN_KEYWORDS``; returns the site display name ("YouTube") or
+    ``None`` when the title names no known site — such sessions roll into
+    the general "Browser" bucket.
+    """
+    title = (payload or {}).get("title") or ""
+    if not title:
+        return None
+    lower = title.lower()
+    for pattern, domain in DOMAIN_KEYWORDS:
+        if re.search(pattern, lower):
+            return SITE_NAMES.get(domain, domain)
+    return None
+
+
+def _display_bucket(app_key: str, payload: dict | None) -> tuple[str, str]:
+    """(bucket key, display name) for one app-session group.
+
+    Browser sessions split by their normalized site (YouTube, GitHub, ...)
+    so known sites get their own entry; unrecognized browsing merges into
+    a single general "Browser" entry. Other apps bucket by app key with
+    the resolved display name.
+    """
+    if _is_browser_session(app_key, payload):
+        site = _browser_site(payload)
+        if site:
+            return f"browser:{site.lower()}", site
+        return "browser", "Browser"
+    return app_key, _app_name(app_key, payload)
+
+
 class AnalyticsStore:
     """Aggregate app-session durations over local-time ranges."""
 
@@ -85,8 +132,11 @@ class AnalyticsStore:
         to aggregate across every device. ``limit`` caps the returned rows
         (top-N); ``share_pct`` is still computed against the full range.
         System apps are excluded by default (F6); ``share_pct`` reflects
-        the visible (post-filter) total. Returns an empty list when the
-        range has no tracked time.
+        the visible (post-filter) total. Browser sessions are bucketed by
+        their normalized site (F8): known sites (YouTube, GitHub, ...) get
+        their own entry and everything else merges into a general
+        "Browser" entry, so a browser never fragments across page titles.
+        Returns an empty list when the range has no tracked time.
         """
         scope = (
             None if device_id == ALL_DEVICES else device_id or self._storage.device_id
@@ -102,24 +152,37 @@ class AnalyticsStore:
             since_ms,
             until_ms,
             device_id=scope,
-            limit=limit,
+            limit=None,
             now_ms=get_current_time_ms(),
             exclude_keys=exclude_keys,
         )
         if not rows:
             return []
-        grand_total = rows[0]["grand_total_s"]
+
+        # Merge the (app_key, payload) groups into display buckets so the
+        # browser fragmentation (one row per page title) collapses into
+        # per-site entries; the top-N limit applies after the merge.
+        buckets: dict[tuple[str, str], float] = {}
+        grand_total = 0.0
+        for row in rows:
+            bucket = _display_bucket(row["app_key"], row["payload"])
+            buckets[bucket] = buckets.get(bucket, 0.0) + row["total_s"]
+            grand_total += row["total_s"]
         if grand_total <= 0:
             return []
-        return [
+        totals = [
             AppTotal(
-                app_key=row["app_key"],
-                app_name=_app_name(row["app_key"], row["payload"]),
-                total_s=row["total_s"],
-                share_pct=round(row["total_s"] / grand_total * 100.0, 1),
+                app_key=bucket_key,
+                app_name=display_name,
+                total_s=total,
+                share_pct=round(total / grand_total * 100.0, 1),
             )
-            for row in rows
+            for (bucket_key, display_name), total in buckets.items()
         ]
+        totals.sort(key=lambda t: t.total_s, reverse=True)
+        if limit is not None:
+            totals = totals[:limit]
+        return totals
 
     def daily_totals(
         self,
