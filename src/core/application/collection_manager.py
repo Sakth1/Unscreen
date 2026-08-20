@@ -14,6 +14,16 @@ from utils.time_utils import utc_timestamp
 
 logger = logging.getLogger(__name__)
 
+# Gap (ms) beyond which a same-app foreground_transition is treated as a
+# fresh session start, not a deduped repeat. The Windows watcher polls
+# every 2s, so repeats are always within this; an Android resume after a
+# screen-off (or a watcher restart) arrives much later and must NOT be
+# deduped — otherwise the resumed usage never opens a session (F5).
+_SAME_APP_RESUME_GAP_MS = 120_000
+
+# How often the periodic session rebuild runs (F1).
+_REBUILD_INTERVAL_S = 30.0
+
 
 class _EventBridge:
     def __init__(self, storage: Storage, platform: str):
@@ -21,6 +31,7 @@ class _EventBridge:
         self._platform = platform
         self._last_app: dict[str, str | None] = {}
         self._last_event_id: dict[str, int | None] = {}
+        self._last_event_ts: dict[str, int | None] = {}
 
     def __call__(self, tick: Tick) -> None:
         ts = int(round(tick.timestamp.timestamp() * 1000))
@@ -44,12 +55,13 @@ class _EventBridge:
         if event_type == "foreground_transition":
             app_key = data.get("app") or data.get("package", "unknown")
             url_visit = data.get("url_visit")
-            if app_key == self._last_app.get(watcher):
-                event_id = self._last_event_id.get(watcher)
-                if url_visit and event_id is not None:
-                    self._write_url_visit(watcher, url_visit, ts, event_id)
-                return
             prev_event_id = self._last_event_id.get(watcher)
+            last_ts = self._last_event_ts.get(watcher)
+            recent = last_ts is not None and (ts - last_ts) <= _SAME_APP_RESUME_GAP_MS
+            if app_key == self._last_app.get(watcher) and recent:
+                if url_visit and prev_event_id is not None:
+                    self._write_url_visit(watcher, url_visit, ts, prev_event_id)
+                return
             self._last_app[watcher] = app_key
             payload = {k: v for k, v in data.items() if k != "url_visit"}
             event_id = self._storage.write_event(
@@ -59,6 +71,7 @@ class _EventBridge:
                 source=watcher,
             )
             self._last_event_id[watcher] = event_id
+            self._last_event_ts[watcher] = ts
             if url_visit:
                 self._write_url_visit(watcher, url_visit, ts, event_id)
             if self._platform == "windows":
@@ -221,6 +234,8 @@ class CollectionManager:
         self._auto_paused = False
         self._screen_monitor_task: asyncio.Task | None = None
         self._health_monitor_task: asyncio.Task | None = None
+        self._rebuild_task: asyncio.Task | None = None
+        self._last_rebuild_event_id: int = 0
         self._on_pause_changed = None
         self._event_bridge = _EventBridge(
             self._storage, "windows" if detect_os() == OSType.WINDOWS else "android"
@@ -282,6 +297,12 @@ class CollectionManager:
                     "Failed to rebuild sessions at startup — sessions may lag events"
                 )
 
+        self._last_rebuild_event_id = self._storage.max_event_id(
+            self._storage.device_id
+        )
+        self._rebuild_task = asyncio.create_task(self._run_periodic_rebuild())
+        logger.info("Periodic session rebuild started")
+
         logger.info(
             "Collection started — events will be written to %s",
             self._storage.db_path,
@@ -316,6 +337,11 @@ class CollectionManager:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._screen_monitor_task
             self._screen_monitor_task = None
+        if self._rebuild_task:
+            self._rebuild_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._rebuild_task
+            self._rebuild_task = None
         await self._scheduler.stop()
         self._event_bridge.finalize_open_sessions(utc_timestamp())
         if self._system_type == OSType.ANDROID:
@@ -403,6 +429,39 @@ class CollectionManager:
                 )
                 logger.info("Screen turned on — collection auto-resumed")
             was_on = now_on
+
+    async def _run_periodic_rebuild(
+        self, interval: float = _REBUILD_INTERVAL_S
+    ) -> None:
+        """Re-derive sessions every ``interval`` seconds.
+
+        Android only ever derived at collection start/stop, so a long-lived
+        process left the dashboard reading a stale snapshot — apps used since
+        the last rebuild never appeared (F1). This task rebuilds whenever new
+        raw events arrive, so the derived tables track the event stream live.
+        """
+        while self._running:
+            await asyncio.sleep(interval)
+            if not self._running:
+                break
+            self._maybe_rebuild_sessions()
+
+    def _maybe_rebuild_sessions(self) -> None:
+        from core.application.session_reconstructor import rebuild_sessions
+
+        try:
+            max_id = self._storage.max_event_id(self._storage.device_id)
+        except Exception:
+            logger.exception("Failed to read max event id for periodic rebuild")
+            return
+        if max_id == self._last_rebuild_event_id:
+            return
+        try:
+            rebuild_sessions(self._storage, self._storage.device_id)
+        except Exception:
+            logger.exception("Periodic session rebuild failed — will retry next cycle")
+            return
+        self._last_rebuild_event_id = max_id
 
     async def _run_health_monitor(self, interval: float = 3600.0) -> None:
         while self._running:

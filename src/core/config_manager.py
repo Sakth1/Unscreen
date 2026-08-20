@@ -24,6 +24,8 @@ DEFAULT_CONFIG = {
     "start_maximized": True,
     "afk_idle_threshold_s": 60.0,
     "afk_away_threshold_s": 300.0,
+    "hide_system_apps": True,
+    "hidden_app_keys": [],
 }
 
 
@@ -211,3 +213,19 @@ class ConfigManager:
     @afk_away_threshold_s.setter
     def afk_away_threshold_s(self, value: float) -> None:
         self._data["afk_away_threshold_s"] = max(0.0, float(value))
+
+    @property
+    def hide_system_apps(self) -> bool:
+        return bool(self._data.get("hide_system_apps", True))
+
+    @hide_system_apps.setter
+    def hide_system_apps(self, value: bool) -> None:
+        self._data["hide_system_apps"] = bool(value)
+
+    @property
+    def hidden_app_keys(self) -> list[str]:
+        return list(self._data.get("hidden_app_keys", []))
+
+    @hidden_app_keys.setter
+    def hidden_app_keys(self, value: list[str]) -> None:
+        self._data["hidden_app_keys"] = [str(k) for k in value]

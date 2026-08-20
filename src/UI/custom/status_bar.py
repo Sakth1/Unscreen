@@ -170,7 +170,7 @@ class CollectionStatusBar(ft.Container):
             try:
                 from core.storage import Storage
 
-                self._storage = Storage()
+                self._storage = Storage(close_orphans=False)
             except Exception:
                 logger.exception("Status bar could not open storage")
                 self._count_text.value = "events: \u003f"

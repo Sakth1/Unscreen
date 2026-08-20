@@ -224,6 +224,32 @@ class TestConfigProperties:
         cm2.load()
         assert cm2.watchers_enabled == ["afk", "power"]
 
+    def test_hide_system_apps_default_and_roundtrip(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        cm = ConfigManager(path=str(tmp_path / "config.json"))
+        assert cm.hide_system_apps is True
+        cm.hide_system_apps = False
+        assert cm.hide_system_apps is False
+        cm.save()
+
+        cm2 = ConfigManager(path=str(tmp_path / "config.json"))
+        cm2.load()
+        assert cm2.hide_system_apps is False
+
+    def test_hidden_app_keys_roundtrip_and_default(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        cm = ConfigManager(path=str(tmp_path / "config.json"))
+        assert cm.hidden_app_keys == []
+        cm.hidden_app_keys = ["com.foo", "bar.exe"]
+        assert cm.hidden_app_keys == ["com.foo", "bar.exe"]
+        cm.save()
+
+        cm2 = ConfigManager(path=str(tmp_path / "config.json"))
+        cm2.load()
+        assert cm2.hidden_app_keys == ["com.foo", "bar.exe"]
+
     def test_log_level_setter_uppercases(self, tmp_path):
         from core.config_manager import ConfigManager
 

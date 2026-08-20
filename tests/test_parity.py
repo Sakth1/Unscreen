@@ -254,6 +254,44 @@ class TestForegroundParity:
             tick = await w.tick()
 
         assert tick is None
+        assert w._initialized is False
+
+    async def test_android_foreground_initializes_with_tick(self):
+        from core.collectors.android.foreground import AndroidForegroundWatcher
+
+        MOCK_TIME = 1_700_000_000_000
+
+        with (
+            patch(
+                "core.collectors.android.foreground.check_usage_stats_permission",
+                return_value=True,
+            ),
+            patch(
+                "core.collectors.android.foreground.get_current_time_ms",
+                return_value=MOCK_TIME,
+            ),
+            patch(
+                "core.collectors.android.foreground.query_usage_stats", return_value={}
+            ),
+            patch(
+                "core.collectors.android.foreground.query_usage_events",
+                return_value=[
+                    {
+                        "package_name": "com.test.app",
+                        "event_type": 1,
+                        "time_stamp_ms": MOCK_TIME - 5000,
+                    },
+                ],
+            ),
+        ):
+            w = AndroidForegroundWatcher()
+            tick = await w.tick()
+
+        assert tick is not None
+        assert tick.watcher == "android_foreground"
+        assert tick.data["package"] == "com.test.app"
+        assert w._current_app == "com.test.app"
+        assert w._initialized is True
 
     async def test_android_foreground_transition_has_package_key(self):
         from core.collectors.android.foreground import AndroidForegroundWatcher
@@ -282,12 +320,14 @@ class TestForegroundParity:
                     },
                 ],
             ),
-            patch("core.collectors.android.foreground.is_screen_on", return_value=True),
         ):
             w = AndroidForegroundWatcher()
             tick = await w.tick()
 
-        assert tick is None
+        assert tick is not None
+        assert tick.watcher == "android_foreground"
+        assert tick.data["package"] == "com.test.app"
+        assert "app_name" in tick.data
 
         with (
             patch(

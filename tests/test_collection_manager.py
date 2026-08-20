@@ -252,4 +252,109 @@ class TestHealthMonitor:
         assert cm._health_monitor_task is None
 
 
+class TestPeriodicRebuild:
+    """F1: sessions must track the event stream live, not only at start/stop."""
+
+    async def test_rebuild_derives_new_events_and_tracks_watermark(self, in_memory_db):
+        from datetime import datetime, timezone
+
+        from core.application.collection_manager import (
+            CollectionManager,
+            _EventBridge,
+        )
+        from core.models import Tick
+
+        cm = CollectionManager()
+        cm._storage = in_memory_db
+        cm._last_rebuild_event_id = 0
+
+        cm._maybe_rebuild_sessions()
+        assert in_memory_db.get_app_sessions() == []
+
+        bridge = _EventBridge(in_memory_db, "android")
+        t0 = datetime(2026, 8, 20, tzinfo=timezone.utc)
+        bridge(
+            Tick(
+                watcher="android_foreground",
+                data={"package": "com.a"},
+                timestamp=t0,
+            )
+        )
+        bridge(
+            Tick(
+                watcher="android_foreground",
+                data={"package": "com.b"},
+                timestamp=t0,
+            )
+        )
+
+        cm._maybe_rebuild_sessions()
+        assert [s["app_key"] for s in in_memory_db.get_app_sessions()] == [
+            "com.a",
+            "com.b",
+        ]
+        assert cm._last_rebuild_event_id == in_memory_db.max_event_id(
+            in_memory_db.device_id
+        )
+
+        cm._maybe_rebuild_sessions()
+        assert len(in_memory_db.get_app_sessions()) == 2
+
+    async def test_rebuild_skips_when_no_new_events(self, in_memory_db):
+        from core.application.collection_manager import CollectionManager
+
+        cm = CollectionManager()
+        cm._storage = in_memory_db
+        cm._last_rebuild_event_id = in_memory_db.max_event_id(in_memory_db.device_id)
+        cm._maybe_rebuild_sessions()
+        assert cm._last_rebuild_event_id == 0
+
+    async def test_rebuild_recovers_after_failure(self, in_memory_db):
+        from datetime import datetime, timezone
+
+        from core.application.collection_manager import (
+            CollectionManager,
+            _EventBridge,
+        )
+        from core.models import Tick
+
+        cm = CollectionManager()
+        cm._storage = in_memory_db
+        cm._last_rebuild_event_id = 0
+
+        bridge = _EventBridge(in_memory_db, "android")
+        t0 = datetime(2026, 8, 20, tzinfo=timezone.utc)
+        bridge(
+            Tick(
+                watcher="android_foreground",
+                data={"package": "com.a"},
+                timestamp=t0,
+            )
+        )
+
+        failing = MagicMock()
+        failing.max_event_id.side_effect = RuntimeError("db busy")
+        cm._storage = failing
+        cm._maybe_rebuild_sessions()
+        assert cm._last_rebuild_event_id == 0
+
+        cm._storage = in_memory_db
+        cm._maybe_rebuild_sessions()
+        assert [s["app_key"] for s in in_memory_db.get_app_sessions()] == ["com.a"]
+
+    async def test_periodic_task_cancelled_on_stop(self):
+        from core.application.collection_manager import CollectionManager
+
+        cm = CollectionManager()
+        cm._running = True
+        cm._rebuild_task = asyncio.create_task(cm._run_periodic_rebuild(interval=3600))
+        cm._running = False
+        if cm._rebuild_task:
+            cm._rebuild_task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cm._rebuild_task
+            cm._rebuild_task = None
+        assert cm._rebuild_task is None
+
+
 _import_guard = True  # prevent unintentional class deletion from breaking indentation

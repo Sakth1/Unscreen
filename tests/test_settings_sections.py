@@ -158,6 +158,32 @@ class TestGeneralSection:
         section._on_url_changed(_event(False))
         assert section._config.url_extraction_enabled is False
 
+    def test_hide_system_switch_writes_config(self, tmp_path):
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        section._on_hide_system_changed(_event(False))
+        assert section._config.hide_system_apps is False
+
+    def test_hidden_keys_field_parses_csv(self, tmp_path):
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        section._on_hidden_keys_changed(_event(" com.foo, bar.exe ,"))
+        assert section._config.hidden_app_keys == ["com.foo", "bar.exe"]
+
+    def test_hidden_keys_field_skips_noop_save(self, tmp_path):
+        from UI.screens.settings.general import General
+
+        section = General(config=_config(tmp_path))
+        before = section._config._data  # noqa: SLF001
+        section._on_hidden_keys_changed(_event(""))
+        assert section._config._data is before  # unchanged, no re-save
+        section._on_hidden_keys_changed(_event("a, b"))
+        assert section._config.hidden_app_keys == ["a", "b"]
+        section._on_hidden_keys_changed(_event("a, b"))
+        assert section._config._data is before  # identical list — no write
+
     def test_watcher_toggle_adds_and_removes(self, tmp_path):
         from UI.screens.settings.general import General
 

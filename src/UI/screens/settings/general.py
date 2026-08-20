@@ -86,6 +86,18 @@ class General(ft.Container):
             label="Track browser page details",
             on_change=self._on_url_changed,
         )
+        self._hide_system_switch = ft.Switch(
+            value=self._config.hide_system_apps,
+            label="Hide system apps in usage",
+            on_change=self._on_hide_system_changed,
+        )
+        self._hidden_keys_field = ft.TextField(
+            value=", ".join(self._config.hidden_app_keys),
+            label="Also hide (comma-separated app keys)",
+            dense=True,
+            hint_text="com.example.app, myapp.exe",
+            on_change=self._on_hidden_keys_changed,
+        )
         self._watcher_toggles: dict[str, ft.Switch] = {}
         watcher_rows = self._build_watcher_rows(watchers)
 
@@ -140,6 +152,13 @@ class General(ft.Container):
                     self._collection_switch,
                     self._url_switch,
                     *watcher_rows,
+                ],
+            ),
+            CardSection(
+                "Usage",
+                [
+                    self._hide_system_switch,
+                    self._hidden_keys_field,
                 ],
             ),
             CardSection(
@@ -238,6 +257,19 @@ class General(ft.Container):
         self._restart_if_running()
         self._toast("Browser tracking will apply on the next collection cycle")
 
+    def _on_hide_system_changed(self, event: ft.ControlEvent) -> None:
+        self._config.hide_system_apps = bool(getattr(event.control, "value", False))
+        self._config.save()
+        self._toast("Usage totals update immediately")
+
+    def _on_hidden_keys_changed(self, event: ft.ControlEvent) -> None:
+        raw = getattr(event.control, "value", "") or ""
+        keys = [token.strip() for token in raw.split(",") if token.strip()]
+        if keys == self._config.hidden_app_keys:
+            return
+        self._config.hidden_app_keys = keys
+        self._config.save()
+
     def _on_watcher_toggled(self, event: ft.ControlEvent, name: str) -> None:
         current = set(self._config.watchers_enabled)
         if getattr(event.control, "value", False):
@@ -334,6 +366,8 @@ class General(ft.Container):
         """Refresh control states when the section becomes visible."""
         self._collection_switch.value = self._config.collection_enabled
         self._url_switch.value = self._config.url_extraction_enabled
+        self._hide_system_switch.value = self._config.hide_system_apps
+        self._hidden_keys_field.value = ", ".join(self._config.hidden_app_keys)
         self._autostart_switch.value = self._config.auto_start_enabled
         self._maximized_switch.value = self._config.start_maximized
         self._theme_btn.selected = [self._config.theme_mode]

@@ -2,6 +2,7 @@ import logging
 
 from core.collectors.android.package_resolver import resolve as resolve_package
 from core.collectors.android.usage_stats import (
+    _EVENT_TYPE_PAUSED,
     _EVENT_TYPE_RESUMED,
     check_usage_stats_permission,
     is_screen_on,
@@ -15,6 +16,10 @@ logger = logging.getLogger(__name__)
 
 _EVENT_WINDOW_OVERLAP_MS = 120_000
 _EVENT_END_BUFFER_MS = 2_000
+#: F7a: when no event falls in the overlap window (the watcher may have
+#: missed ticks — process killed, long stall), widen the lookback this far
+#: before giving up to the day-level stats fallback.
+_EVENT_FALLBACK_WINDOW_MS = 600_000
 
 
 class AndroidForegroundWatcher:
@@ -53,6 +58,11 @@ class AndroidForegroundWatcher:
         return self._check_transition(now_ms)
 
     def _initialize(self, now_ms: int) -> Tick | None:
+        if not is_screen_on():
+            # F7a: never fabricate a foreground app while the screen is
+            # off — stay pending and retry on the next tick.
+            logger.debug("foreground: screen off at startup — staying pending")
+            return None
         app = self._resolve_current_foreground(now_ms)
         if app is None:
             start_of_day_ms = day_start_ms(now_ms)
@@ -66,6 +76,10 @@ class AndroidForegroundWatcher:
             self._initialized = True
             self._last_tick_ms = now_ms
             logger.info("foreground initialized: %s", resolve_package(app))
+            return Tick(
+                watcher="android_foreground",
+                data={"package": app, "app_name": resolve_package(app)},
+            )
         return None
 
     def _check_transition(self, now_ms: int) -> Tick | None:
@@ -78,7 +92,12 @@ class AndroidForegroundWatcher:
                     "foreground [stale]: %s (screen on, no events)", self._current_app
                 )
                 return None
-            logger.info("foreground [idle]: no app activity")
+            if self._current_app is not None:
+                logger.info(
+                    "foreground [idle]: cleared %s",
+                    resolve_package(self._current_app),
+                )
+                self._current_app = None
             return None
 
         if app == self._current_app:
@@ -108,11 +127,29 @@ class AndroidForegroundWatcher:
         if end_ms <= begin_ms:
             return self._current_app
 
-        events = query_usage_events(begin_ms, end_ms)
-        if not events:
-            return None
+        app = _latest_foreground(query_usage_events(begin_ms, end_ms))
+        if app is not None:
+            return app
 
-        for ev in reversed(events):
-            if ev["event_type"] == _EVENT_TYPE_RESUMED:
-                return ev["package_name"]
-        return None
+        # F7a: nothing in the overlap window — the watcher may have missed
+        # ticks (process killed, long stall). Widen the lookback before
+        # falling back to day-level stats.
+        fallback_begin = min(begin_ms, now_ms - _EVENT_FALLBACK_WINDOW_MS)
+        if fallback_begin < begin_ms:
+            app = _latest_foreground(query_usage_events(fallback_begin, end_ms))
+        return app
+
+
+def _latest_foreground(events: list[dict]) -> str | None:
+    """The most recent app named by ``events``.
+
+    Prefers the newest RESUMED event; when only pauses exist, the latest
+    PAUSED event still names the app that was active.
+    """
+    latest_paused: str | None = None
+    for ev in reversed(events):
+        if ev["event_type"] == _EVENT_TYPE_RESUMED:
+            return ev["package_name"]
+        if ev["event_type"] == _EVENT_TYPE_PAUSED and latest_paused is None:
+            latest_paused = ev["package_name"]
+    return latest_paused

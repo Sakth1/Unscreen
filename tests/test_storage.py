@@ -914,3 +914,164 @@ class TestStorageInitRegression:
             storage._conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         )
         storage.close()
+
+
+class TestSessionRebuildHelpers:
+    def test_max_event_id_empty_is_zero(self, in_memory_db):
+        assert in_memory_db.max_event_id(in_memory_db.device_id) == 0
+        assert in_memory_db.max_event_id() == 0
+
+    def test_max_event_id_tracks_newest_row(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        last = _write_fg_event(in_memory_db, ts=2000)
+        assert in_memory_db.max_event_id(in_memory_db.device_id) == last
+        assert in_memory_db.max_event_id() == last
+
+    def test_max_event_id_scoped_to_device(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        foreign_fk = in_memory_db._resolve_device_fk("foreign-device")
+        in_memory_db._conn.execute(
+            "INSERT INTO raw_events (device_fk, event_type_fk, source_fk,"
+            " timestamp, collected_at, payload, payload_hash)"
+            " VALUES (?, ?, ?, ?, ?, ?, 0)",
+            (
+                foreign_fk,
+                in_memory_db._resolve_name_fk(
+                    "event_types", "foreground_transition", {}
+                ),
+                in_memory_db._resolve_name_fk("sources", "foreground", {}),
+                3000,
+                3000,
+                '{"app": "x"}',
+            ),
+        )
+        assert in_memory_db.max_event_id("foreign-device") > in_memory_db.max_event_id(
+            in_memory_db.device_id
+        )
+
+    def test_replace_device_sessions_repoints_url_visits(self, in_memory_db):
+        """F1: row ids change on re-insert, so url_visits.session_id must
+        be re-pointed at the fresh rows or the Windows bridge orphans them."""
+        event_id = _write_fg_event(in_memory_db, ts=1000)
+        session_id = in_memory_db.open_app_session(
+            event_id, 1000, "Code.exe", {"app": "Code.exe"}
+        )
+        in_memory_db.write_url_visit(
+            url="https://a.com",
+            seen_at=1500,
+            event_id=event_id,
+            browser="brave",
+            scheme="https",
+            host="a.com",
+            domain="a.com",
+        )
+        in_memory_db.backfill_url_sessions_for_event(event_id, session_id)
+        assert in_memory_db.get_url_visits()[0]["session_id"] == session_id
+
+        in_memory_db.replace_device_sessions(
+            in_memory_db.device_id,
+            [
+                {
+                    "event_id": event_id,
+                    "start_ts": 1000,
+                    "end_ts": None,
+                    "duration_s": None,
+                    "app_key": "Code.exe",
+                    "payload": {"app": "Code.exe"},
+                }
+            ],
+            [],
+        )
+        sessions = in_memory_db.get_app_sessions()
+        assert len(sessions) == 1
+        assert sessions[0]["id"] != session_id
+        assert in_memory_db.get_url_visits()[0]["session_id"] == sessions[0]["id"]
+
+    def test_totals_with_now_ms_counts_open_sessions(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.open_app_session(1, 1000, "Code.exe", {"app": "Code.exe"})
+        rows = in_memory_db.get_app_session_totals(
+            since_ms=0, until_ms=10_000, now_ms=5_000
+        )
+        assert len(rows) == 1
+        assert rows[0]["app_key"] == "Code.exe"
+        assert rows[0]["total_s"] == pytest.approx(4.0)
+        assert rows[0]["grand_total_s"] == pytest.approx(4.0)
+
+    def test_totals_open_session_capped_at_until(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.open_app_session(1, 1000, "Code.exe", {"app": "Code.exe"})
+        rows = in_memory_db.get_app_session_totals(
+            since_ms=0, until_ms=2_000, now_ms=5_000
+        )
+        assert rows[0]["total_s"] == pytest.approx(1.0)
+
+    def test_totals_without_now_ms_still_excludes_open(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.open_app_session(1, 1000, "Code.exe", {"app": "Code.exe"})
+        rows = in_memory_db.get_app_session_totals(since_ms=0, until_ms=10_000)
+        assert rows == []
+
+    def test_totals_exclude_keys_drops_rows(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.open_app_session(1, 1000, "com.sec.android.app.launcher", {})
+        _write_fg_event(in_memory_db, ts=2000)
+        in_memory_db.open_app_session(2, 2000, "Instagram", {})
+        rows = in_memory_db.get_app_session_totals(
+            since_ms=0,
+            until_ms=10_000,
+            now_ms=10_000,
+            exclude_keys={"com.sec.android.app.launcher"},
+        )
+        assert [r["app_key"] for r in rows] == ["Instagram"]
+
+    def test_totals_exclude_keys_shrinks_grand_total(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.open_app_session(1, 1000, "a", {})
+        _write_fg_event(in_memory_db, ts=2000)
+        in_memory_db.open_app_session(2, 2000, "b", {})
+        rows = in_memory_db.get_app_session_totals(
+            since_ms=0,
+            until_ms=10_000,
+            now_ms=10_000,
+            exclude_keys={"a"},
+        )
+        assert len(rows) == 1
+        assert rows[0]["grand_total_s"] == pytest.approx(8.0)
+
+    def test_totals_exclude_keys_case_insensitive(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.open_app_session(1, 1000, "DWM.EXE", {})
+        _write_fg_event(in_memory_db, ts=2000)
+        in_memory_db.open_app_session(2, 2000, "b", {})
+        rows = in_memory_db.get_app_session_totals(
+            since_ms=0,
+            until_ms=10_000,
+            now_ms=10_000,
+            exclude_keys={"dwm.exe"},
+        )
+        assert [r["app_key"] for r in rows] == ["b"]
+
+    def test_totals_exclude_keys_empty_set_noop(self, in_memory_db):
+        _write_fg_event(in_memory_db, ts=1000)
+        in_memory_db.open_app_session(1, 1000, "a", {})
+        rows = in_memory_db.get_app_session_totals(
+            since_ms=0, until_ms=10_000, now_ms=10_000, exclude_keys=set()
+        )
+        assert len(rows) == 1
+
+    def test_close_orphans_false_leaves_open_sessions(self, tmp_path):
+        db = str(tmp_path / "test.db")
+        storage = Storage(db_path=db)
+        storage.open_app_session(
+            event_id=100, start_ts=1_000_000, app_key="Code.exe", payload={}
+        )
+        storage.close()
+
+        reopened = Storage(db_path=db, close_orphans=False)
+        try:
+            sessions = reopened.get_app_sessions()
+            assert len(sessions) == 1
+            assert sessions[0]["end_ts"] is None
+        finally:
+            reopened.close()
