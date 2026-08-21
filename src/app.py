@@ -307,8 +307,20 @@ class App:
             if lock_file.exists():
                 try:
                     old_pid = int(lock_file.read_text().strip())
-                    # Check if the old process is still running
-                    # On Android, /proc/<pid>/cmdline exists for alive processes
+
+                    # Same PID means flet restarted the Dart VM within the
+                    # same OS process — this is NOT a duplicate, just a
+                    # hot-restart.  Let it continue.
+                    if old_pid == current_pid:
+                        logger.info(
+                            "Duplicate detection: same PID (%s), "
+                            "Dart VM restart in same process — not a duplicate",
+                            current_pid,
+                        )
+                        return False
+
+                    # Different PID — check if the old process is still running.
+                    # On Android, /proc/<pid>/cmdline exists for alive processes.
                     proc_file = Path(f"/proc/{old_pid}/cmdline")
                     if proc_file.exists():
                         # Old process is still running — this is a duplicate
@@ -344,7 +356,7 @@ class App:
 
     async def _maximize_after_delay(self):
         await asyncio.sleep(
-            0.1
+            2.0
         )  # flet#6101: client window-state init must settle first
         self.page.window.maximized = True
         self.page.update()
