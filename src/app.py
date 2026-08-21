@@ -92,6 +92,38 @@ _THEME_MODES = {
 }
 
 
+def _consume_post_update_flag() -> tuple[bool, str | None]:
+    """Consume the post-update sentinel (file or env) if present.
+
+    The watchdog writes ``.post_update_flag`` to the data dir before
+    relaunching the app (see :func:`core.update_flow.write_relaunch_watchdog`).
+    Env var ``UNSCREEN_POST_UPDATE`` is kept as a fallback.  The flag is
+    one-shot: it is deleted/popped when consumed.
+
+    Returns ``(found, source)`` where source is ``"file"``, ``"env"`` or None.
+    """
+    # Env var first — cheap and survives temp-dir sentinel mismatches.
+    env_val = os.environ.pop("UNSCREEN_POST_UPDATE", None)
+    if env_val is not None:
+        return True, f"env:{env_val}"
+
+    # File sentinel — survives `setlocal` + `start` env isolation.
+    try:
+        from pathlib import Path
+
+        flag = (
+            Path(os.environ.get("UNSCREEN_DATA_DIR") or get_data_dir())
+            / ".post_update_flag"
+        )
+        if flag.exists():
+            with suppress(Exception):
+                flag.unlink()
+            return True, f"file:{flag}"
+    except Exception:
+        pass
+    return False, None
+
+
 def _theme_mode_from_config(mode: str) -> ft.ThemeMode:
     return _THEME_MODES.get(mode, ft.ThemeMode.SYSTEM)
 
@@ -161,6 +193,32 @@ class App:
         else:
             self._is_mobile = detect_os() == OSType.ANDROID
 
+        # Diagnostic: log early window geometry — crucial for post-update
+        # blank-screen investigation (see startup.log + issue #6101).
+        try:
+            _win = self.page.window
+            logger.info(
+                "Early window state: win_w=%s win_h=%s maximized=%s minimized=%s visible=%s "
+                "page_w=%s page_h=%s platform=%s is_mobile=%s",
+                getattr(_win, "width", None),
+                getattr(_win, "height", None),
+                getattr(_win, "maximized", None),
+                getattr(_win, "minimized", None),
+                getattr(_win, "visible", None),
+                getattr(self.page, "width", None),
+                getattr(self.page, "height", None),
+                getattr(platform_obj, "name", None) if platform_obj else None,
+                self._is_mobile,
+            )
+            _write_startup_log(
+                f"early window: win={getattr(_win, 'width', None)}x"
+                f"{getattr(_win, 'height', None)} max={getattr(_win, 'maximized', None)} "
+                f"page={getattr(self.page, 'width', None)}x"
+                f"{getattr(self.page, 'height', None)}"
+            )
+        except Exception:
+            logger.exception("Failed to log early window state")
+
         _write_startup_log("loading config")
         logger.info("Loading config...")
         self.config = ConfigManager()
@@ -175,20 +233,27 @@ class App:
         apply_accent_theme(self.page, self.config.theme)
         self._set_window_icon()
 
+        # Consume post-update flag (sentinel file or env) early so it
+        # never leaks to a subsequent normal launch.  Must run even
+        # when start_maximized is False.
+        is_post_update, flag_src = _consume_post_update_flag()
+        if is_post_update:
+            _write_startup_log(f"post-update flag consumed: {flag_src}")
+            logger.info(
+                "Post-update relaunch detected (%s) — will skip start_maximized",
+                flag_src,
+            )
+
         if self.config.start_maximized:
             # REMOVE THIS BS OF A CODE WHEN flet #6101 IS FIXED
-            #
             # Skip maximize on the first launch after a post-update
-            # relaunch (watchdog sets UNSCREEN_POST_UPDATE=1).  Flet
-            # #6101 causes sporadic blank screens when the Dart client
-            # hasn't fully settled; a fresh post-update start is the
-            # worst case for this race.
-            post_update = os.environ.pop("UNSCREEN_POST_UPDATE", None)
-            if post_update:
+            # relaunch — flet #6101 causes sporadic blank screens when
+            # the Dart client hasn't fully settled; a fresh post-update
+            # cold start is the worst case.
+            if is_post_update:
                 logger.info(
-                    "Skipping start_maximized on post-update relaunch "
-                    "(UNSCREEN_POST_UPDATE=%s)",
-                    post_update,
+                    "Skipping start_maximized on post-update relaunch (%s)",
+                    flag_src,
                 )
             else:
                 self._schedule_maximize()
@@ -372,8 +437,43 @@ class App:
         await asyncio.sleep(
             2.0
         )  # flet#6101: client window-state init must settle first
-        self.page.window.maximized = True
-        self.page.update()
+        try:
+            win = self.page.window
+            logger.info(
+                "Pre-maximize window state: width=%s height=%s maximized=%s "
+                "minimized=%s visible=%s page_w=%s page_h=%s platform=%s",
+                getattr(win, "width", None),
+                getattr(win, "height", None),
+                getattr(win, "maximized", None),
+                getattr(win, "minimized", None),
+                getattr(win, "visible", None),
+                getattr(self.page, "width", None),
+                getattr(self.page, "height", None),
+                getattr(self.page, "platform", None),
+            )
+            _write_startup_log(
+                f"pre-maximize: win={getattr(win, 'width', None)}x"
+                f"{getattr(win, 'height', None)} max={getattr(win, 'maximized', None)} "
+                f"page={getattr(self.page, 'width', None)}x"
+                f"{getattr(self.page, 'height', None)}"
+            )
+            if getattr(win, "maximized", False):
+                logger.info("Window already maximized — skipping")
+                return
+            win.maximized = True
+            self.page.update()
+            logger.info(
+                "Post-maximize window state: width=%s height=%s maximized=%s",
+                getattr(win, "width", None),
+                getattr(win, "height", None),
+                getattr(win, "maximized", None),
+            )
+            _write_startup_log(
+                f"post-maximize: maximized={getattr(win, 'maximized', None)}"
+            )
+        except Exception:
+            logger.exception("Failed during _maximize_after_delay")
+            _write_startup_log("pre-maximize failed")
 
     def _initiate(self):
         if (
