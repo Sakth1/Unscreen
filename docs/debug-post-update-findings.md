@@ -85,3 +85,43 @@ Flet restarts the Dart VM within the **same OS process** (same PID). The lock fi
 - **#96** (dev6): Android activity.finish() + 3-tier cleanup
 - **#97** (dev7): Lock-file duplicate detection + destroyed session guard
 - **#98** (dev8): Windows blank screen fix + Android finishAndRemoveTask + duplicate PID fix
+- **#99** (dev9): Fresh Android activity resolution + Windows post-update maximize skip
+
+---
+
+## Dev8→Dev9: Why dev9 is needed
+
+### Android: Stale cached activity
+
+Dev8's `finishAndRemoveTask()` fix lives in the **old** binary (the one that fires the installer). But `get_activity()` caches the `mActivity` reference at startup. After a Dart VM restart, flet creates a **new** `mActivity` (different JNI object, different address). Calling `finishAndRemoveTask()` on the stale cached activity is a no-op — the old task stays in recents.
+
+**Evidence from dev7→dev8 log:**
+```
+18:08:15,227 - calling activity.finish() directly (activity=<android.app.Activity at 0x761663f130 ...>)
+18:09:14,687 - get_activity: resolved activity=<android.app.Activity at 0x761478b130 ...>
+```
+
+The cached `0x761663f130` is stale after the Dart VM restart. The new activity is `0x761478b130`.
+
+**Fix (dev9):** `_close()` resolves a **fresh** `mActivity` via `autoclass(host_class).mActivity` instead of using the cached `get_activity()`. Logs `isFinishing()` and `taskId` for diagnostic verification.
+
+### Windows: Post-update maximize race
+
+Dev8 increased `_maximize_after_delay` from 0.1s to 2.0s, but the blank screen persists. The issue is probabilistic (flet #6101) and 2.0s reduces but doesn't eliminate it.
+
+**Fix (dev9):** Watchdog CMD sets `UNSCREEN_POST_UPDATE=1` env before launching the app. `App.__init__` checks this env var and skips `_schedule_maximize()` entirely on post-update relaunch, avoiding the race completely.
+
+---
+
+## Dev7→Dev8 Log Analysis (from user test)
+
+### Android
+- `finishAndRemoveTask()` was NOT called (log shows `activity.finish()` — this is dev7's old binary)
+- `page.window.destroy()` blocked indefinitely (Dart bridge dead)
+- Duplicate detection: `old_pid=24347 == current_pid=24347` → `Exiting` (dev7's old binary, not dev8's fix)
+- Old instance lingers in recents with frozen UI (bridge dead, process alive)
+
+### Windows
+- All startup steps succeed (mutex, config, page.add)
+- Title bar renders but content is empty (flet #6101 race, not Python error)
+- `start_maximized` triggered maximize, which blanked the content

@@ -69,6 +69,17 @@ def compare_versions(left: str, right: str) -> int:
             return -1
         if right_is_num:
             return 1
+        # Handle prerelease ids like "dev9" vs "dev10": split trailing numeric
+        # suffix so numeric part is compared numerically, not lexicographically.
+        import re as _re
+
+        _m_left = _re.match(r"^([A-Za-z-]+?)(\d+)$", left_ident)
+        _m_right = _re.match(r"^([A-Za-z-]+?)(\d+)$", right_ident)
+        if _m_left and _m_right and _m_left.group(1) == _m_right.group(1):
+            _l_num = int(_m_left.group(2))
+            _r_num = int(_m_right.group(2))
+            if _l_num != _r_num:
+                return (_l_num > _r_num) - (_l_num < _r_num)
         return (left_ident > right_ident) - (left_ident < right_ident)
     return (len(left_pre) > len(right_pre)) - (len(left_pre) < len(right_pre))
 

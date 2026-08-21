@@ -23,6 +23,7 @@ from core.update_checker import (
     UpdateInfo,
 )
 from utils.install_info import build_installer_args, detect_install_mode, install_dir
+from utils.paths import get_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,14 @@ def write_relaunch_watchdog(
     pid = int(setup_pid)
     previous = int(old_pid) if old_pid else os.getpid()
     app = str(Path(app_exe)).replace('"', '^"')
+    app_dir = str(Path(app_exe).parent).replace('"', '^"')
+    # File sentinel survives setlocal/start env isolation — env var alone
+    # is lost with `setlocal` + `start` (see flet #6101 post-update blank).
+    try:
+        sentinel = str(Path(get_data_dir()) / ".post_update_flag")
+    except Exception:
+        sentinel = str(Path(tempfile.gettempdir()) / "unscreen-post-update.flag")
+    sentinel_escaped = sentinel.replace('"', '""')
 
     lines = [
         "@echo off",
@@ -71,6 +80,8 @@ def write_relaunch_watchdog(
         f'set "TARGETPID={pid}"',
         f'set "TARGETPID2={previous}"',
         f'set "APP={app}"',
+        f'set "APPDIR={app_dir}"',
+        f'set "SENTINEL={sentinel_escaped}"',
         ":wait",
         'tasklist /fi "PID eq %TARGETPID%" 2>nul | findstr /r /c:"%TARGETPID%" >nul',
         "if not errorlevel 1 goto :sleep",
@@ -84,8 +95,9 @@ def write_relaunch_watchdog(
         "timeout /t 3 /nobreak >nul",
         "goto :launch",
         ":launch",
-        "set UNSCREEN_POST_UPDATE=1",
-        'start "" "%APP%"',
+        'type nul > "%SENTINEL%"',
+        'set "UNSCREEN_POST_UPDATE=1"',
+        'start "" /d "%APPDIR%" "%APP%"',
         'del "%~f0"',
         "exit /b 0",
     ]
