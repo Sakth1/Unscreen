@@ -260,15 +260,19 @@ def _finish_activity_after_install(page: ft.Page) -> None:
 
     The flet template manifest uses ``singleTop`` with an empty task
     affinity, so a later launch (installer "Open", launcher) can create a
-    second task — showing as duplicate instances in recents. Destroying the
-    window finishes the current activity, so the stale task leaves recents
-    and the next open is a single fresh task.
+    second task — showing as duplicate instances in recents. Removing the
+    task from recents ensures the stale task leaves recents and the next
+    open is a single fresh task.
 
     Strategy (in order of reliability):
-    1. Direct ``activity.finish()`` via jnius — bypasses the flet bridge
-       which may be dead if the user switched to the package installer.
-    2. ``page.window.destroy()`` — flet's own cleanup (may timeout).
-    3. ``os._exit(0)`` — last-resort hard kill of the Python process.
+    1. ``activity.finishAndRemoveTask()`` via jnius — finishes the activity
+       AND removes the task from recents. Bypasses the flet bridge which
+       may be dead if the user switched to the package installer.
+    2. ``activity.finish()`` — fallback if ``finishAndRemoveTask()`` is not
+       available (very old Android versions).
+    3. ``os._exit(0)`` — hard kill of the Python process immediately after
+       activity cleanup. ``page.window.destroy()`` is intentionally skipped
+       because it blocks indefinitely when the flet bridge is dead.
     """
     logger.info("_finish_activity_after_install: scheduling activity cleanup in 2.0s")
 
@@ -278,45 +282,50 @@ def _finish_activity_after_install(page: ft.Page) -> None:
         )
         await asyncio.sleep(2.0)
 
-        # 1. Direct activity.finish() — most reliable, no flet bridge needed
         try:
             from utils.android import get_activity
 
             activity = get_activity()
             if activity is not None:
-                logger.info(
-                    "_finish_activity_after_install: calling activity.finish() directly (activity=%s)",
-                    activity,
-                )
-                activity.finish()
-                logger.info(
-                    "_finish_activity_after_install: activity.finish() succeeded"
-                )
+                # finishAndRemoveTask() finishes the activity AND removes
+                # the task from recents — solves the "old instance lingers
+                # in recents" issue.
+                try:
+                    logger.info(
+                        "_finish_activity_after_install: calling "
+                        "activity.finishAndRemoveTask() (activity=%s)",
+                        activity,
+                    )
+                    activity.finishAndRemoveTask()
+                    logger.info(
+                        "_finish_activity_after_install: "
+                        "finishAndRemoveTask() succeeded"
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "_finish_activity_after_install: "
+                        "finishAndRemoveTask() failed (%s), "
+                        "falling back to activity.finish()",
+                        exc,
+                    )
+                    activity.finish()
+                    logger.info(
+                        "_finish_activity_after_install: activity.finish() succeeded"
+                    )
             else:
                 logger.warning(
-                    "_finish_activity_after_install: no activity available for direct finish()"
+                    "_finish_activity_after_install: "
+                    "no activity available for direct finish()"
                 )
         except Exception as exc:
             logger.error(
-                "_finish_activity_after_install: activity.finish() failed: %s", exc
+                "_finish_activity_after_install: activity cleanup failed: %s", exc
             )
 
-        # 2. Flet window destroy — fallback, may timeout if bridge is dead
-        try:
-            logger.info("_finish_activity_after_install: calling page.window.destroy()")
-            await page.window.destroy()
-            logger.info(
-                "_finish_activity_after_install: page.window.destroy() completed"
-            )
-        except Exception as exc:
-            logger.error(
-                "_finish_activity_after_install: page.window.destroy() failed: %s", exc
-            )
-
-        # 3. Hard kill — ensure old process is gone even if both above failed
-        logger.info(
-            "_finish_activity_after_install: calling os._exit(0) as last resort"
-        )
+        # Kill the process immediately. page.window.destroy() is skipped
+        # because it blocks indefinitely when the flet bridge is dead
+        # (user switched to package installer).
+        logger.info("_finish_activity_after_install: calling os._exit(0)")
         os._exit(0)
 
     asyncio.create_task(_close())
