@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import re
 import tempfile
 import time
@@ -262,6 +263,12 @@ def _finish_activity_after_install(page: ft.Page) -> None:
     second task — showing as duplicate instances in recents. Destroying the
     window finishes the current activity, so the stale task leaves recents
     and the next open is a single fresh task.
+
+    Strategy (in order of reliability):
+    1. Direct ``activity.finish()`` via jnius — bypasses the flet bridge
+       which may be dead if the user switched to the package installer.
+    2. ``page.window.destroy()`` — flet's own cleanup (may timeout).
+    3. ``os._exit(0)`` — last-resort hard kill of the Python process.
     """
     logger.info("_finish_activity_after_install: scheduling activity cleanup in 2.0s")
 
@@ -270,8 +277,33 @@ def _finish_activity_after_install(page: ft.Page) -> None:
             "_finish_activity_after_install: waiting 2.0s before destroying activity"
         )
         await asyncio.sleep(2.0)
-        logger.info("_finish_activity_after_install: calling page.window.destroy()")
+
+        # 1. Direct activity.finish() — most reliable, no flet bridge needed
         try:
+            from utils.android import get_activity
+
+            activity = get_activity()
+            if activity is not None:
+                logger.info(
+                    "_finish_activity_after_install: calling activity.finish() directly (activity=%s)",
+                    activity,
+                )
+                activity.finish()
+                logger.info(
+                    "_finish_activity_after_install: activity.finish() succeeded"
+                )
+            else:
+                logger.warning(
+                    "_finish_activity_after_install: no activity available for direct finish()"
+                )
+        except Exception as exc:
+            logger.error(
+                "_finish_activity_after_install: activity.finish() failed: %s", exc
+            )
+
+        # 2. Flet window destroy — fallback, may timeout if bridge is dead
+        try:
+            logger.info("_finish_activity_after_install: calling page.window.destroy()")
             await page.window.destroy()
             logger.info(
                 "_finish_activity_after_install: page.window.destroy() completed"
@@ -280,6 +312,12 @@ def _finish_activity_after_install(page: ft.Page) -> None:
             logger.error(
                 "_finish_activity_after_install: page.window.destroy() failed: %s", exc
             )
+
+        # 3. Hard kill — ensure old process is gone even if both above failed
+        logger.info(
+            "_finish_activity_after_install: calling os._exit(0) as last resort"
+        )
+        os._exit(0)
 
     asyncio.create_task(_close())
 
