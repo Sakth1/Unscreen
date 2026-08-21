@@ -76,10 +76,13 @@ def write_relaunch_watchdog(
         "if not errorlevel 1 goto :sleep",
         'tasklist /fi "PID eq %TARGETPID2%" 2>nul | findstr /r /c:"%TARGETPID2%" >nul',
         "if not errorlevel 1 goto :sleep",
-        "goto :launch",
+        "goto :prelaunch",
         ":sleep",
         "ping 127.0.0.1 -n 2 >nul",
         "goto :wait",
+        ":prelaunch",
+        "timeout /t 3 /nobreak >nul",
+        "goto :launch",
         ":launch",
         'start "" "%APP%"',
         'del "%~f0"',
@@ -87,22 +90,33 @@ def write_relaunch_watchdog(
     ]
     with path.open("w", encoding="ascii", newline="\r\n") as fp:
         fp.write("\n".join(lines) + "\n")
-    logger.info("Wrote relaunch watchdog %s", path)
+    logger.info(
+        "Wrote relaunch watchdog %s (setup_pid=%s, old_pid=%s, app=%s, delay=3s)",
+        path,
+        pid,
+        previous,
+        app,
+    )
     return path
 
 
 def spawn_watchdog(path: str | os.PathLike[str]) -> None:
     """Start the watchdog detached and windowless."""
-    subprocess.Popen(
-        [str(path)],
-        cwd=str(Path(path).parent),
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        stdin=subprocess.DEVNULL,
-        creationflags=_CREATE_NO_WINDOW,
-        close_fds=True,
-    )
-    logger.info("Spawned relaunch watchdog %s", path)
+    logger.info("Spawning relaunch watchdog: %s", path)
+    try:
+        subprocess.Popen(
+            [str(path)],
+            cwd=str(Path(path).parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            creationflags=_CREATE_NO_WINDOW,
+            close_fds=True,
+        )
+        logger.info("Watchdog spawned successfully: %s", path)
+    except Exception:
+        logger.exception("Failed to spawn watchdog: %s", path)
+        raise
 
 
 class Updater:
@@ -130,16 +144,30 @@ class Updater:
         Returns :class:`ApplyOutcome` with ``CANCELED`` when UAC is declined.
         Raises :class:`UpdateApplyError` when the installer cannot be started.
         """
+        logger.info(
+            "apply_update called: version=%s installer=%s relaunch=%s is_windows=%s",
+            update.version,
+            installer_path,
+            relaunch,
+            _is_windows(),
+        )
         try:
             outcome = self.checker.apply(update, installer_path, extra_args)
         except ApplyError as exc:
+            logger.error("apply_update failed: error=%s", exc)
             raise UpdateApplyError(str(exc)) from exc
+        logger.info(
+            "apply_update outcome: result=%s process_id=%s",
+            outcome.result,
+            outcome.process_id,
+        )
         if (
             outcome.result is ApplyResult.APPLIED
             and outcome.process_id is not None
             and relaunch
             and _is_windows()
         ):
+            logger.info("Arming relaunch watchdog for setup_pid=%s", outcome.process_id)
             self._arm_relaunch(outcome.process_id)
         return outcome
 
@@ -147,6 +175,12 @@ class Updater:
         directory = install_dir()
         exe = (
             directory / Path(sys.executable).name if directory else Path(sys.executable)
+        )
+        logger.info(
+            "_arm_relaunch: setup_pid=%s app_exe=%s install_dir=%s",
+            setup_pid,
+            exe,
+            directory,
         )
         watchdog = write_relaunch_watchdog(setup_pid, exe)
         spawn_watchdog(watchdog)

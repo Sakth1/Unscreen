@@ -64,6 +64,27 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+
+def _write_startup_log(message: str) -> None:
+    """Write a timestamped line to the startup log file.
+
+    This persists even if the window is empty, allowing post-mortem
+    diagnosis of startup failures.
+    """
+    import time
+    from pathlib import Path
+
+    try:
+        data_dir = Path(os.environ.get("UNSCREEN_DATA_DIR") or get_data_dir())
+        log_file = data_dir / "startup.log"
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        line = f"{timestamp} {message}\n"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(line)
+    except Exception:
+        pass
+
+
 _THEME_MODES = {
     "system": ft.ThemeMode.SYSTEM,
     "light": ft.ThemeMode.LIGHT,
@@ -77,19 +98,32 @@ def _theme_mode_from_config(mode: str) -> ft.ThemeMode:
 
 class App:
     def __init__(self, page: ft.Page):
+        _write_startup_log("App.__init__ started")
+        logger.info("App.__init__ started: page=%s", page)
         # The installer (AppMutex=Unscreen_Mutex) uses this to detect and
         # close a running app before updating it. A second concurrent
         # instance (e.g. a relaunch racing the previous process) would hit
         # locked database files, so refuse to start instead of crashing.
-        if (
-            detect_os() == OSType.WINDOWS
-            and is_packaged()
-            and acquire_instance_mutex("Unscreen_Mutex") is None
-        ):
-            raise RuntimeError(
-                "Another instance of Unscreen is already running. "
-                "Close it and try again."
+        if detect_os() == OSType.WINDOWS and is_packaged():
+            mutex_result = acquire_instance_mutex("Unscreen_Mutex")
+            _write_startup_log(
+                f"mutex acquired: {'yes' if mutex_result is not None else 'FAILED'}"
             )
+            logger.info(
+                "Mutex acquisition: os=%s packaged=%s result=%s",
+                detect_os(),
+                is_packaged(),
+                (
+                    "acquired"
+                    if mutex_result is not None
+                    else "FAILED (another instance running)"
+                ),
+            )
+            if mutex_result is None:
+                raise RuntimeError(
+                    "Another instance of Unscreen is already running. "
+                    "Close it and try again."
+                )
 
         self._closing = False
 
@@ -111,8 +145,16 @@ class App:
         else:
             self._is_mobile = detect_os() == OSType.ANDROID
 
+        _write_startup_log("loading config")
+        logger.info("Loading config...")
         self.config = ConfigManager()
         self.config.load()
+        _write_startup_log(f"config loaded: theme_mode={self.config.theme_mode}")
+        logger.info(
+            "Config loaded: theme_mode=%s theme=%s",
+            self.config.theme_mode,
+            self.config.theme,
+        )
         self.page.theme_mode = _theme_mode_from_config(self.config.theme_mode)
         apply_accent_theme(self.page, self.config.theme)
         self._set_window_icon()
@@ -208,14 +250,20 @@ class App:
         self.page.on_route_change = self.route_manager.handle_route_change
         self.page.on_resize = self._handle_page_resize
         self.page.on_media_change = self._handle_media_change
+        _write_startup_log("calling page.add()")
+        logger.info("Calling page.add() to mount UI...")
         self.page.add(
             ft.Column(expand=True, spacing=0, controls=[self.shell, self.status_bar])
         )
+        _write_startup_log("page.add() completed")
+        logger.info("page.add() completed successfully")
 
         self._initiate()
         self.status_bar.start_refresh(self.page)
         self.dashboard_page.start_refresh(self.page)
         self.route_manager.navigate(self.route_manager.current_route)
+        _write_startup_log("App.__init__ completed")
+        logger.info("App.__init__ completed successfully")
 
     def _set_window_icon(self) -> None:
         if self.page.platform is not None and self.page.platform.is_desktop():
@@ -700,9 +748,16 @@ class App:
 
 
 async def entrypoint(page: ft.Page):
+    _write_startup_log("entrypoint called")
+    logger.info("entrypoint called: page=%s", page)
     try:
+        _write_startup_log("creating App instance")
+        logger.info("Creating App instance...")
         App(page)
+        _write_startup_log("App instance created successfully")
+        logger.info("App instance created successfully")
     except Exception as exc:
+        _write_startup_log(f"Fatal error during app startup: {exc}")
         logger.exception("Fatal error during app startup")
         _render_startup_error(page, exc)
 

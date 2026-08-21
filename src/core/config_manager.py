@@ -52,14 +52,30 @@ class ConfigManager:
         self._data: dict = deepcopy(DEFAULT_CONFIG)
 
     def load(self) -> None:
+        logger.info(
+            "ConfigManager.load: path=%s exists=%s", self._path, self._path.exists()
+        )
         if self._path.exists():
             try:
+                file_size = self._path.stat().st_size
+                logger.info("Config file exists: size=%s bytes", file_size)
                 with open(self._path) as f:
                     loaded = json.load(f)
                 self._data = {**deepcopy(DEFAULT_CONFIG), **loaded}
-                logger.info("Config loaded from %s", self._path)
-            except Exception:
+                logger.info(
+                    "Config loaded successfully: keys=%s theme_mode=%s theme=%s",
+                    list(loaded.keys()),
+                    self._data.get("theme_mode"),
+                    self._data.get("theme"),
+                )
+            except Exception as exc:
                 logger.exception("Failed to load config, using defaults")
+                logger.error(
+                    "Config load error: file=%s size=%s error=%s",
+                    self._path,
+                    self._path.stat().st_size if self._path.exists() else "N/A",
+                    exc,
+                )
                 self._data = deepcopy(DEFAULT_CONFIG)
         else:
             logger.info("No config file at %s, using defaults", self._path)
