@@ -177,7 +177,21 @@ class App:
 
         if self.config.start_maximized:
             # REMOVE THIS BS OF A CODE WHEN flet #6101 IS FIXED
-            self._schedule_maximize()
+            #
+            # Skip maximize on the first launch after a post-update
+            # relaunch (watchdog sets UNSCREEN_POST_UPDATE=1).  Flet
+            # #6101 causes sporadic blank screens when the Dart client
+            # hasn't fully settled; a fresh post-update start is the
+            # worst case for this race.
+            post_update = os.environ.pop("UNSCREEN_POST_UPDATE", None)
+            if post_update:
+                logger.info(
+                    "Skipping start_maximized on post-update relaunch "
+                    "(UNSCREEN_POST_UPDATE=%s)",
+                    post_update,
+                )
+            else:
+                self._schedule_maximize()
 
         setup_file_logging()
         apply_root_level(self.config.log_level)
