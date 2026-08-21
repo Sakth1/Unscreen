@@ -207,6 +207,13 @@ class Dashboard(BaseScreen):
             for card in self._cards:
                 try:
                     page.run_task(card.run, show_placeholder=show_placeholder)
+                except RuntimeError as exc:
+                    if "destroyed session" in str(exc):
+                        logger.warning(
+                            "Dashboard card load skipped: flet session destroyed (duplicate instance?)"
+                        )
+                        return
+                    logger.exception("Failed to schedule dashboard card load")
                 except Exception:
                     logger.exception("Failed to schedule dashboard card load")
             return
