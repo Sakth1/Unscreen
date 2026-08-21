@@ -125,6 +125,22 @@ class App:
                     "Close it and try again."
                 )
 
+        # Android: detect duplicate instances from Dart VM restarts.
+        # When flet performs a hot restart, it creates a new Python process
+        # while the old one (with a destroyed session) is still alive.
+        # Use a lock file with PID to detect and exit duplicates.
+        if (
+            detect_os() == OSType.ANDROID
+            and is_packaged()
+            and self._check_android_duplicate()
+        ):
+            _write_startup_log("Android duplicate detected, exiting")
+            logger.warning(
+                "Android duplicate instance detected (Dart VM restart?). "
+                "Exiting to let the new instance take over."
+            )
+            os._exit(0)
+
         self._closing = False
 
         self.page = page
@@ -270,6 +286,57 @@ class App:
             icon = ASSET_DIR / "icon_windows.ico"
             if icon.exists():
                 self.page.window.icon = str(icon)
+
+    @staticmethod
+    def _check_android_duplicate() -> bool:
+        """Check for duplicate Android instances from Dart VM restarts.
+
+        When flet performs a hot restart, it creates a new Python process
+        while the old one (with a destroyed session) is still alive. This
+        uses a lock file with PID to detect duplicates.
+
+        Returns True if this is a duplicate instance that should exit.
+        """
+        from pathlib import Path
+
+        try:
+            data_dir = Path(os.environ.get("UNSCREEN_DATA_DIR") or get_data_dir())
+            lock_file = data_dir / ".instance.lock"
+            current_pid = os.getpid()
+
+            if lock_file.exists():
+                try:
+                    old_pid = int(lock_file.read_text().strip())
+                    # Check if the old process is still running
+                    # On Android, /proc/<pid>/cmdline exists for alive processes
+                    proc_file = Path(f"/proc/{old_pid}/cmdline")
+                    if proc_file.exists():
+                        # Old process is still running — this is a duplicate
+                        logger.info(
+                            "Duplicate detection: lock_file exists, "
+                            "old_pid=%s still running, current_pid=%s",
+                            old_pid,
+                            current_pid,
+                        )
+                        return True
+                    # Old process is dead — safe to take over
+                    logger.info(
+                        "Duplicate detection: lock_file exists, "
+                        "old_pid=%s is dead, taking over with pid=%s",
+                        old_pid,
+                        current_pid,
+                    )
+                except (ValueError, OSError):
+                    # Corrupted lock file or can't read proc — assume stale
+                    logger.info("Duplicate detection: corrupted lock file, taking over")
+
+            # Write our PID to the lock file
+            lock_file.write_text(str(current_pid))
+            logger.info("Duplicate detection: wrote lock file with pid=%s", current_pid)
+            return False
+        except Exception as exc:
+            logger.error("Duplicate detection failed: %s", exc)
+            return False
 
     def _schedule_maximize(self):
         if self.page.platform is not None and self.page.platform.is_desktop() is True:
