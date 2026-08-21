@@ -639,6 +639,7 @@ class UpdateChecker:
                 flags,
             )
             activity.startActivity(intent)
+            logger.info("APK install intent launched successfully")
         except Exception:
             logger.exception(
                 "APK install intent failed; manual install required (apk=%s package=%s authority=%s sdk=%s)",

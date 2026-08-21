@@ -263,10 +263,23 @@ def _finish_activity_after_install(page: ft.Page) -> None:
     window finishes the current activity, so the stale task leaves recents
     and the next open is a single fresh task.
     """
+    logger.info("_finish_activity_after_install: scheduling activity cleanup in 2.0s")
 
     async def _close() -> None:
-        await asyncio.sleep(0.8)
-        await page.window.destroy()
+        logger.info(
+            "_finish_activity_after_install: waiting 2.0s before destroying activity"
+        )
+        await asyncio.sleep(2.0)
+        logger.info("_finish_activity_after_install: calling page.window.destroy()")
+        try:
+            await page.window.destroy()
+            logger.info(
+                "_finish_activity_after_install: page.window.destroy() completed"
+            )
+        except Exception as exc:
+            logger.error(
+                "_finish_activity_after_install: page.window.destroy() failed: %s", exc
+            )
 
     asyncio.create_task(_close())
 

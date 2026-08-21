@@ -14,6 +14,7 @@ def get_activity():
     """
     global _activity
     if _activity is not None:
+        logger.info("get_activity: returning cached activity=%s", _activity)
         return _activity
     activity_host_class = os.getenv("MAIN_ACTIVITY_HOST_CLASS_NAME")
     if not activity_host_class:
@@ -24,8 +25,10 @@ def get_activity():
     try:
         from jnius import autoclass  # type: ignore
 
+        logger.info("get_activity: loading activity host class=%s", activity_host_class)
         activity_host = autoclass(activity_host_class)
         _activity = activity_host.mActivity
+        logger.info("get_activity: resolved activity=%s", _activity)
         return _activity
     except Exception as e:
         logger.warning("Failed to get Android activity via jnius: %s", e)
