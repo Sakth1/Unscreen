@@ -268,6 +268,8 @@ def _finish_activity_after_install(page: ft.Page) -> None:
     1. ``activity.finishAndRemoveTask()`` via jnius — finishes the activity
        AND removes the task from recents. Bypasses the flet bridge which
        may be dead if the user switched to the package installer.
+       Uses a **fresh** ``mActivity`` lookup (not the cached one) because
+       the cached reference may be stale after a Dart VM restart.
     2. ``activity.finish()`` — fallback if ``finishAndRemoveTask()`` is not
        available (very old Android versions).
     3. ``os._exit(0)`` — hard kill of the Python process immediately after
@@ -282,44 +284,69 @@ def _finish_activity_after_install(page: ft.Page) -> None:
         )
         await asyncio.sleep(2.0)
 
+        # Resolve a FRESH mActivity — the cached one from get_activity()
+        # may be stale after a Dart VM restart or process re-creation.
+        activity = None
         try:
-            from utils.android import get_activity
+            from jnius import autoclass  # type: ignore
 
-            activity = get_activity()
-            if activity is not None:
-                # finishAndRemoveTask() finishes the activity AND removes
-                # the task from recents — solves the "old instance lingers
-                # in recents" issue.
-                try:
-                    logger.info(
-                        "_finish_activity_after_install: calling "
-                        "activity.finishAndRemoveTask() (activity=%s)",
-                        activity,
-                    )
-                    activity.finishAndRemoveTask()
-                    logger.info(
-                        "_finish_activity_after_install: "
-                        "finishAndRemoveTask() succeeded"
-                    )
-                except Exception as exc:
-                    logger.warning(
-                        "_finish_activity_after_install: "
-                        "finishAndRemoveTask() failed (%s), "
-                        "falling back to activity.finish()",
-                        exc,
-                    )
-                    activity.finish()
-                    logger.info(
-                        "_finish_activity_after_install: activity.finish() succeeded"
-                    )
+            host_class = os.getenv("MAIN_ACTIVITY_HOST_CLASS_NAME")
+            if host_class:
+                logger.info(
+                    "_finish_activity_after_install: "
+                    "resolving fresh mActivity from class=%s",
+                    host_class,
+                )
+                activity_host = autoclass(host_class)
+                activity = activity_host.mActivity
+                logger.info(
+                    "_finish_activity_after_install: "
+                    "fresh activity resolved=%s (isFinishing=%s, taskId=%s)",
+                    activity,
+                    activity.isFinishing(),
+                    activity.getTaskId(),
+                )
             else:
                 logger.warning(
                     "_finish_activity_after_install: "
-                    "no activity available for direct finish()"
+                    "MAIN_ACTIVITY_HOST_CLASS_NAME not set"
                 )
         except Exception as exc:
             logger.error(
-                "_finish_activity_after_install: activity cleanup failed: %s", exc
+                "_finish_activity_after_install: "
+                "fresh activity resolution failed: %s",
+                exc,
+            )
+
+        if activity is not None:
+            # finishAndRemoveTask() finishes the activity AND removes
+            # the task from recents — solves the "old instance lingers
+            # in recents" issue.
+            try:
+                logger.info(
+                    "_finish_activity_after_install: calling "
+                    "activity.finishAndRemoveTask() (activity=%s)",
+                    activity,
+                )
+                activity.finishAndRemoveTask()
+                logger.info(
+                    "_finish_activity_after_install: " "finishAndRemoveTask() succeeded"
+                )
+            except Exception as exc:
+                logger.warning(
+                    "_finish_activity_after_install: "
+                    "finishAndRemoveTask() failed (%s), "
+                    "falling back to activity.finish()",
+                    exc,
+                )
+                activity.finish()
+                logger.info(
+                    "_finish_activity_after_install: activity.finish() succeeded"
+                )
+        else:
+            logger.warning(
+                "_finish_activity_after_install: "
+                "no activity available — trying os._exit(0) anyway"
             )
 
         # Kill the process immediately. page.window.destroy() is skipped

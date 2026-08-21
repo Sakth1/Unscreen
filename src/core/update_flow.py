@@ -84,6 +84,7 @@ def write_relaunch_watchdog(
         "timeout /t 3 /nobreak >nul",
         "goto :launch",
         ":launch",
+        "set UNSCREEN_POST_UPDATE=1",
         'start "" "%APP%"',
         'del "%~f0"',
         "exit /b 0",
