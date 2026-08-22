@@ -255,6 +255,12 @@ class App:
                     "Skipping start_maximized on post-update relaunch (%s)",
                     flag_src,
                 )
+                # Force a re-render after post-update cold start.  On normal
+                # launches _maximize_after_delay provides the deferred
+                # page.update() that paints the UI tree; skipping maximize
+                # here also skipped that re-render, leaving the Dart client
+                # with a blank initial paint (flet #6101).
+                self.page.run_task(self._post_update_refresh)
             else:
                 self._schedule_maximize()
 
@@ -474,6 +480,26 @@ class App:
         except Exception:
             logger.exception("Failed during _maximize_after_delay")
             _write_startup_log("pre-maximize failed")
+
+    async def _post_update_refresh(self):
+        """Force a page re-render after post-update cold start.
+
+        On normal launches _maximize_after_delay triggers page.update()
+        which forces the Dart client to paint the UI tree.  On post-update
+        launches we skip maximize to avoid flet #6101 issues, but the
+        missing page.update() leaves the Dart client with a blank initial
+        paint.  This method provides the re-render trigger without any
+        window geometry changes.
+        """
+        await asyncio.sleep(2.0)
+        try:
+            _write_startup_log("post-update page refresh: calling page.update()")
+            self.page.update()
+            _write_startup_log("post-update page refresh completed")
+            logger.info("Post-update page refresh completed")
+        except Exception:
+            logger.exception("Failed during post-update page refresh")
+            _write_startup_log("post-update page refresh FAILED")
 
     def _initiate(self):
         if (
