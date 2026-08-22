@@ -124,6 +124,84 @@ def _consume_post_update_flag() -> tuple[bool, str | None]:
     return False, None
 
 
+def _write_launch_diagnostics() -> None:
+    """Record process lineage into startup.log before anything else runs.
+
+    Correlating a blank-window report with *how* the process was started
+    (explorer double-click, installer ``[Run]`` entry, relaunch watchdog
+    CMD chain) is the single most useful datum for post-mortem analysis,
+    so it is captured unconditionally and never mutates state.
+    """
+    pid = os.getpid()
+    ppid: int | None = None
+    parent_name: str | None = None
+    try:
+        import psutil
+
+        parent = psutil.Process(pid).parent()
+        if parent is not None:
+            ppid = parent.pid
+            parent_name = parent.name()
+    except Exception:
+        pass  # diagnostics must never break startup
+
+    env_flag = os.environ.get("UNSCREEN_POST_UPDATE")
+    sentinel_exists = False
+    try:
+        from pathlib import Path
+
+        sentinel = (
+            Path(os.environ.get("UNSCREEN_DATA_DIR") or get_data_dir())
+            / ".post_update_flag"
+        )
+        sentinel_exists = sentinel.exists()
+    except Exception:
+        pass
+
+    _write_startup_log(
+        f"launch diagnostics: pid={pid} ppid={ppid} parent={parent_name!r} "
+        f"env_flag={env_flag!r} sentinel_exists={sentinel_exists}"
+    )
+
+
+def _enable_transport_trace() -> None:
+    """Attach a DEBUG-level file handler to flet's transport logger.
+
+    Only used on post-update launches. The trace records REGISTER_CLIENT
+    handshakes, outbound control patches, and inbound events in
+    ``logs/transport.log``, which distinguishes "client never painted a
+    tree it received" from "messages never reached the client".
+    """
+    transport = logging.getLogger("flet_transport")
+    if transport.level <= logging.DEBUG and any(
+        getattr(handler, "_unscreen_transport_trace", False)
+        for handler in transport.handlers
+    ):
+        return
+    try:
+        from logging.handlers import RotatingFileHandler
+
+        log_dir = os.path.join(get_data_dir(), "logs")
+        os.makedirs(log_dir, exist_ok=True)
+        handler = RotatingFileHandler(
+            os.path.join(log_dir, "transport.log"),
+            maxBytes=5 * 1024 * 1024,
+            backupCount=1,
+            encoding="utf-8",
+        )
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+        )
+        # Marker attribute so repeated post-update launches don't stack
+        # duplicate handlers (clear_logs() doesn't know about this one).
+        handler._unscreen_transport_trace = True  # type: ignore[attr-defined]
+        transport.addHandler(handler)
+        transport.setLevel(logging.DEBUG)
+    except Exception:
+        logger.exception("Failed to enable flet_transport trace logging")
+
+
 def _theme_mode_from_config(mode: str) -> ft.ThemeMode:
     return _THEME_MODES.get(mode, ft.ThemeMode.SYSTEM)
 
@@ -174,6 +252,7 @@ class App:
             os._exit(0)
 
         self._closing = False
+        self._root_control: ft.Column | None = None
 
         self.page = page
         self.page.title = "Unscreen"
@@ -255,11 +334,11 @@ class App:
                     "Skipping start_maximized on post-update relaunch (%s)",
                     flag_src,
                 )
-                # Force a re-render after post-update cold start.  On normal
-                # launches _maximize_after_delay provides the deferred
-                # page.update() that paints the UI tree; skipping maximize
-                # here also skipped that re-render, leaving the Dart client
-                # with a blank initial paint (flet #6101).
+                # Force a re-render after post-update cold start: the
+                # installer just replaced files and the first frame can
+                # lose the race against the client's render pipeline,
+                # leaving a blank window. Delta updates cannot recover
+                # that, so rebuild the whole tree instead.
                 self.page.run_task(self._post_update_refresh)
             else:
                 self._schedule_maximize()
@@ -351,11 +430,14 @@ class App:
         self.page.on_route_change = self.route_manager.handle_route_change
         self.page.on_resize = self._handle_page_resize
         self.page.on_media_change = self._handle_media_change
+        # Root of the mounted control tree; kept so a post-update relaunch
+        # can force a full rebuild (see _post_update_refresh).
+        self._root_control = ft.Column(
+            expand=True, spacing=0, controls=[self.shell, self.status_bar]
+        )
         _write_startup_log("calling page.add()")
         logger.info("Calling page.add() to mount UI...")
-        self.page.add(
-            ft.Column(expand=True, spacing=0, controls=[self.shell, self.status_bar])
-        )
+        self.page.add(self._root_control)
         _write_startup_log("page.add() completed")
         logger.info("page.add() completed successfully")
 
@@ -482,30 +564,32 @@ class App:
             _write_startup_log("pre-maximize failed")
 
     async def _post_update_refresh(self):
-        """Force a re-render after post-update cold start (flet #6101).
+        """Force a full UI-tree rebuild after a post-update cold start.
 
-        page.update() alone doesn't fix the blank screen — the Dart
-        client's render pipeline is broken on cold starts.  A window
-        geometry change (minimize→restore) forces Windows to send
-        WM_PAINT, which triggers the Dart client to re-render.
+        A blank window after an update means the Dart side never painted the
+        initial control tree (first-frame race right after the installer
+        replaced files — flet #6101 family). ``page.update()`` only sends
+        deltas and window toggles only patch window properties, so neither
+        can repaint a tree the client never rendered. Removing all controls
+        and re-adding the saved root forces the client to rebuild and paint
+        from scratch.
         """
-        await asyncio.sleep(2.0)
+        await asyncio.sleep(2.5)
         try:
-            win = self.page.window
-            _write_startup_log(
-                f"post-update refresh: toggling window "
-                f"(min={getattr(win, 'minimized', None)})"
-            )
-            win.minimized = True
+            _enable_transport_trace()
+            if self._root_control is None:
+                _write_startup_log("post-update rebuild skipped: no root control")
+                return
+            _write_startup_log("post-update rebuild: cleaning page")
+            logger.info("Post-update refresh: rebuilding UI tree")
+            self.page.clean()
+            self.page.add(self._root_control)
             self.page.update()
-            await asyncio.sleep(0.3)
-            win.minimized = False
-            self.page.update()
-            _write_startup_log("post-update window toggle completed")
-            logger.info("Post-update window toggle completed")
+            _write_startup_log("post-update rebuild completed")
+            logger.info("Post-update rebuild completed")
         except Exception:
-            logger.exception("Failed during post-update window toggle")
-            _write_startup_log("post-update window toggle FAILED")
+            logger.exception("Failed during post-update UI rebuild")
+            _write_startup_log("post-update rebuild FAILED")
 
     def _initiate(self):
         if (
@@ -973,6 +1057,7 @@ class App:
 
 
 async def entrypoint(page: ft.Page):
+    _write_launch_diagnostics()
     _write_startup_log("entrypoint called")
     logger.info("entrypoint called: page=%s", page)
     try:
