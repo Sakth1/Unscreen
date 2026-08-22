@@ -482,24 +482,30 @@ class App:
             _write_startup_log("pre-maximize failed")
 
     async def _post_update_refresh(self):
-        """Force a page re-render after post-update cold start.
+        """Force a re-render after post-update cold start (flet #6101).
 
-        On normal launches _maximize_after_delay triggers page.update()
-        which forces the Dart client to paint the UI tree.  On post-update
-        launches we skip maximize to avoid flet #6101 issues, but the
-        missing page.update() leaves the Dart client with a blank initial
-        paint.  This method provides the re-render trigger without any
-        window geometry changes.
+        page.update() alone doesn't fix the blank screen — the Dart
+        client's render pipeline is broken on cold starts.  A window
+        geometry change (minimize→restore) forces Windows to send
+        WM_PAINT, which triggers the Dart client to re-render.
         """
         await asyncio.sleep(2.0)
         try:
-            _write_startup_log("post-update page refresh: calling page.update()")
+            win = self.page.window
+            _write_startup_log(
+                f"post-update refresh: toggling window "
+                f"(min={getattr(win, 'minimized', None)})"
+            )
+            win.minimized = True
             self.page.update()
-            _write_startup_log("post-update page refresh completed")
-            logger.info("Post-update page refresh completed")
+            await asyncio.sleep(0.3)
+            win.minimized = False
+            self.page.update()
+            _write_startup_log("post-update window toggle completed")
+            logger.info("Post-update window toggle completed")
         except Exception:
-            logger.exception("Failed during post-update page refresh")
-            _write_startup_log("post-update page refresh FAILED")
+            logger.exception("Failed during post-update window toggle")
+            _write_startup_log("post-update window toggle FAILED")
 
     def _initiate(self):
         if (

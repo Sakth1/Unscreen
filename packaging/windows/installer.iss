@@ -115,6 +115,11 @@ Type: dirifempty; Name: "{app}"
 Root: HKLM; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Unscreen"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup; Check: IsAdminInstallMode
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Unscreen"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: startup; Check: not IsAdminInstallMode
 
+[Run]
+; Offer to launch the app after installation — also serves as a fallback
+; when the post-update watchdog (relaunch CMD) fails to start the app.
+Filename: "{app}\{#MyAppExeName}"; Description: "Open {#MyAppName}"; Flags: nowait postinstall skipifsilent unchecked
+
 ; First-run seeding: the app folds these into its config on very first boot
 ; (only when no config exists yet), so the installer's choices stick.
 [INI]
