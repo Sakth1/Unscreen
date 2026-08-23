@@ -59,7 +59,7 @@ class TestSurfaceMetrics:
         from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        assert _surface(_overlay_dialog(page)).width == 360 * 0.92
+        assert _surface(_overlay_dialog(page)).width == 360 * 0.88
 
     def test_desktop_width_is_fixed(self):
         reset_app_state()
@@ -68,7 +68,7 @@ class TestSurfaceMetrics:
         from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        assert _surface(_overlay_dialog(page)).width == 420.0
+        assert _surface(_overlay_dialog(page)).width == 500.0
 
     def test_long_notes_capped_on_tall_windows(self):
         reset_app_state()
@@ -110,7 +110,7 @@ class TestSurfaceMetrics:
         from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(release_notes=""), "0.4.10-dev3")
-        assert _surface(_overlay_dialog(page)).height == 260.0
+        assert _surface(_overlay_dialog(page)).height == 280.0
 
     def test_mobile_cap_lower_than_desktop(self):
         reset_app_state()
@@ -137,10 +137,10 @@ class TestSurfaceMetrics:
             page, _update(release_notes="\n".join(["* x"] * 60)), "0.4.10-dev3"
         )
         surface = _surface(_overlay_dialog(page))
-        assert surface.width == 420.0
+        assert surface.width == 500.0
         assert surface.height == 640.0
         _set_layout(360, 500)
-        assert surface.width == 360 * 0.92
+        assert surface.width == 360 * 0.88
         assert surface.height == 450.0
 
 
@@ -202,9 +202,9 @@ class TestShowUpdateDialog:
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
         labels = [b.content for b in _buttons(_overlay_dialog(page))]
-        assert "Download & install" in labels
+        assert "Download and install" in labels
         assert "Later" in labels
-        assert "Open releases page" in labels
+        assert "Open releases page" not in labels
 
     def test_manual_only_dialog_omits_install(self, monkeypatch):
         reset_app_state()
@@ -217,7 +217,7 @@ class TestShowUpdateDialog:
             page, _update(asset_url=None, asset_name=None), "0.4.10-dev3"
         )
         labels = [b.content for b in _buttons(_overlay_dialog(page))]
-        assert "Download & install" not in labels
+        assert "Download and install" not in labels
         assert "Open releases page" in labels
 
     def test_release_notes_rendered_as_markdown(self):
@@ -299,7 +299,7 @@ class TestShowUpdateDialog:
         from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        _button(_overlay_dialog(page), "Download & install").on_click(None)
+        _button(_overlay_dialog(page), "Download and install").on_click(None)
         assert get_app_state().update_status is UpdateStatus.DOWNLOADING
         page.run_task.assert_called_once()
 
@@ -371,7 +371,7 @@ class TestAndroidInstallFinishesActivity:
         from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        _button(_overlay_dialog(page), "Download & install").on_click(None)
+        _button(_overlay_dialog(page), "Download and install").on_click(None)
 
         run_install = page.run_task.call_args.args[0]
         loop = asyncio.new_event_loop()
@@ -412,7 +412,7 @@ class TestAndroidInstallFinishesActivity:
         from UI.custom.update_dialog import show_update_dialog
 
         show_update_dialog(page, _update(), "0.4.10-dev3")
-        _button(_overlay_dialog(page), "Download & install").on_click(None)
+        _button(_overlay_dialog(page), "Download and install").on_click(None)
 
         run_install = page.run_task.call_args.args[0]
         loop = asyncio.new_event_loop()

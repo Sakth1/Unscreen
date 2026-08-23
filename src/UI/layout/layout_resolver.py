@@ -29,8 +29,14 @@ from utils.constants import (
 
 logger = logging.getLogger(__name__)
 
-#: Surface width on wide form factors (within the M3 dialog width range).
-_DIALOG_WIDTH = 420.0
+#: Surface width on desktop — monitors have room for a wider dialog.
+_DIALOG_DESKTOP_WIDTH = 500.0
+
+#: Surface width on tablet landscape — mid-range.
+_DIALOG_TABLET_LANDSCAPE_WIDTH = 440.0
+
+#: Surface width on tablet portrait / narrow screens.
+_DIALOG_NARROW_WIDTH = 420.0
 
 #: Surface height cap for wide form factors; taller content scrolls inside.
 _DIALOG_MAX_HEIGHT = 640.0
@@ -45,10 +51,10 @@ _MIN_SURFACE_HEIGHT = 260.0
 _DIALOG_HEIGHT_FACTOR = 0.9
 
 #: Mobile gutter factor so the surface never touches the screen edges.
-_MOBILE_WIDTH_FACTOR = 0.92
+_MOBILE_WIDTH_FACTOR = 0.88
 
-#: Fixed chrome around the notes (header, chips, meta, actions, paddings).
-_DIALOG_CHROME_HEIGHT = 240.0
+#: Fixed chrome around the notes (header, chips, meta, fixed footer, paddings).
+_DIALOG_CHROME_HEIGHT = 280.0
 
 
 def _resolve_width_class(width: float) -> WindowWidthClass:
@@ -249,16 +255,20 @@ def resolve_dialog_metrics(
 ) -> DialogMetrics:
     """Derive update-dialog surface limits from the form factor and viewport.
 
-    Wide form factors (tablet landscape, desktop) get a fixed surface width
-    within the M3 dialog range; narrow ones (phones, portrait tablets) scale
-    with the viewport so the surface never touches the screen edges. The
-    height cap is form-factor relative and window relative (90% of the
-    window height); the fixed chrome around the notes stays constant.
+    Desktop gets the widest surface (500px); tablet landscape gets 440px;
+    narrower form factors scale with the viewport so the surface never
+    touches the screen edges.  The height cap is form-factor relative and
+    window relative (90% of the window height); the fixed chrome around
+    the notes stays constant.
     """
+    if form_factor == ScreenFormFactor.DESKTOP:
+        surface_width = _DIALOG_DESKTOP_WIDTH
+    elif form_factor == ScreenFormFactor.TABLET_LANDSCAPE:
+        surface_width = _DIALOG_TABLET_LANDSCAPE_WIDTH
+    else:
+        surface_width = min(_DIALOG_NARROW_WIDTH, width * _MOBILE_WIDTH_FACTOR)
+
     wide = form_factor in (ScreenFormFactor.TABLET_LANDSCAPE, ScreenFormFactor.DESKTOP)
-    surface_width = (
-        _DIALOG_WIDTH if wide else min(_DIALOG_WIDTH, width * _MOBILE_WIDTH_FACTOR)
-    )
     max_height = _DIALOG_MAX_HEIGHT if wide else _MOBILE_MAX_HEIGHT
     return DialogMetrics(
         width=float(surface_width),
