@@ -1,17 +1,19 @@
 # App icons in the dashboard (Windows + Android)
 
 Date: 2026-08-20
+Updated: 2026-08-23 — Implementation complete.
 
 ## 1. Executive summary
 
-- Windows icons: extract from the app's **executable path** via `ExtractIconExW` / `SHGetFileInfoW` (ctypes), render the `HICON` into a 32-bit `CreateDIBSection` with `DrawIconEx`, read the RGBA pixels, and encode PNG with a ~40-line pure-Python encoder (zlib + struct). No Pillow needed (it is only in the `e2e` extra, not production deps). PyWin32 is an optional alternative — `pywinauto` already pulls it in on Windows.
-- Gap in the current collector: `WindowAnalyzer` stores only the **process name** (e.g. `chrome.exe`), never the exe path. Icon extraction requires the path; the recommended fix is to capture `psutil.Process(pid).exe()` at collection time and store it in the payload (app_key stays the process name).
-- Android icons: `PackageManager.getApplicationIcon(pkg)` / `PackageItemInfo.loadIcon(pm)` returns a `Drawable`; draw it into a `Bitmap` (ARGB_8888) via `Canvas`, then `Bitmap.compress(PNG)` — all reachable from Python through the existing jnius pattern (`get_activity()` in `src/utils/android.py`, `package_resolver.py`).
+- **Windows icons (IMPLEMENTED):** extract from the app's **executable path** via `ExtractIconExW` / `SHGetFileInfoW` (ctypes), render the `HICON` into a 32-bit `CreateDIBSection` with `DrawIconEx`, read the RGBA pixels, and encode PNG with a ~40-line pure-Python encoder (zlib + struct). No Pillow needed (it is only in the `e2e` extra, not production deps). PyWin32 is an optional alternative — `pywinauto` already pulls it in on Windows. Implementation: `src/core/icons/icon_resolver.py:exe_icon_png()`.
+- **Exe path capture (IMPLEMENTED):** `WindowAnalyzer` now captures `psutil.Process(pid).exe()` at collection time and stores it in the event payload (app_key stays the process name). For historical events without exe_path, a lazy psutil lookup at display time serves as fallback. Implementation: `src/core/collectors/windows/window.py:analyze()`.
+- **Android icons (IMPLEMENTED):** `PackageManager.getApplicationIcon(pkg)` returns a `Drawable`; draw it into a `Bitmap` (ARGB_8888) via `Canvas`, then `Bitmap.compress(PNG)` — all reachable from Python through the existing jnius pattern (`get_activity()` in `src/utils/android.py`, `package_resolver.py`). Implementation: `src/core/icons/icon_resolver.py:package_icon_png()`.
 - flet 0.86.5 accepts PNG **bytes directly**: `Image.src: Union[str, bytes]` (URL / asset path / base64 string / raw bytes) and `CircleAvatar.foreground_image_src: Union[str, bytes]` with fallback chain `foreground_image_src → background_image_src → bgcolor`. There is **no `src_base64` parameter** in 0.86 — base64/bytes go straight into `src`. Pass raw PNG bytes; no asset bundling needed on any platform.
 - UWP/Store apps: the "proper" WinRT route (`Windows.Management.Deployment.PackageManager.FindPackagesForUser`, `AppListEntry.AppInfo.DisplayInfo.GetLogo(Size)`) requires the third-party `winrt`/`winsdk` Python package and is not worth it. UWP executables in `WindowsApps` are directly readable, so the exe-path + `SHGetFileInfoW` path covers them too.
 - The Explorer icon cache (`%LocalAppData%\Microsoft\Windows\Explorer\iconcache_*.db`) is an undocumented, forensics-only format — do not use it.
-- Site buckets (`browser:youtube`, …): use the favicon endpoint `https://icons.duckduckgo.com/ip3/<domain>.ico`, verified live in 2026 (200 `image/x-icon`/`image/png`; 404 on unknown domains, so fall back to the browser's icon, then to initials).
-- Cache everything in a new SQLite `app_icons` table (repo is already SQLite-based, `SCHEMA_VERSION = 8` in `src/core/storage/__init__.py`); resolve lazily in a background thread via the existing `run_task` pattern in `top_apps_card.py`, keeping the colored-initials `CircleAvatar` as instant placeholder.
+- Site buckets (`browser:youtube`, …): use the favicon endpoint `https://icons.duckduckgo.com/ip3/<domain>.ico`, verified live in 2026 (200 `image/x-icon`/`image/png`; 404 on unknown domains, so fall back to the browser's icon, then to initials). Implementation: `src/core/icons/icon_resolver.py:fetch_site_favicon()`.
+- **Cache (IMPLEMENTED):** SQLite `app_icons` table (schema v9, `SCHEMA_VERSION = 9` in `src/core/storage/__init__.py`); resolved lazily in a background thread via the existing `run_task` pattern in `top_apps_card.py`, keeping the colored-initials `CircleAvatar` as instant placeholder. Time-based eviction (entries >30 days old re-resolved). Implementation: `src/core/icons/icon_cache.py:IconCache`.
+- **Privacy toggle (IMPLEMENTED):** `fetch_favicons` config option controls whether DuckDuckGo favicon requests are made. Local icon extraction (Windows exe, Android package) is unaffected. Toggle in Settings > Usage. Implementation: `src/core/config_manager.py:fetch_favicons`, `src/UI/screens/settings/general.py`.
 
 ## 2. Windows icon extraction
 
