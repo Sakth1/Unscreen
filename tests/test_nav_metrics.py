@@ -102,13 +102,13 @@ class TestNavBarMetrics:
 
 class TestDialogMetrics:
     def test_wide_form_factors_get_fixed_width(self):
-        for form_factor in (
-            ScreenFormFactor.TABLET_LANDSCAPE,
-            ScreenFormFactor.DESKTOP,
-        ):
-            metrics = resolve_dialog_metrics(form_factor, 1280, 800)
-            assert metrics.width == 420.0
-            assert metrics.max_height == 640.0
+        metrics = resolve_dialog_metrics(ScreenFormFactor.DESKTOP, 1280, 800)
+        assert metrics.width == 500.0
+        assert metrics.max_height == 640.0
+
+    def test_tablet_landscape_gets_mid_width(self):
+        metrics = resolve_dialog_metrics(ScreenFormFactor.TABLET_LANDSCAPE, 1024, 768)
+        assert metrics.width == 440.0
 
     def test_wide_height_cap_scales_with_window(self):
         metrics = resolve_dialog_metrics(ScreenFormFactor.DESKTOP, 1280, 500)
@@ -116,9 +116,9 @@ class TestDialogMetrics:
 
     def test_mobile_width_scales_with_viewport(self):
         metrics = resolve_dialog_metrics(ScreenFormFactor.MOBILE, 360, 800)
-        assert metrics.width == 360 * 0.92
+        assert metrics.width == 360 * 0.88
 
-    def test_mobile_width_never_exceeds_dialog_width(self):
+    def test_mobile_width_never_exceeds_narrow_width(self):
         metrics = resolve_dialog_metrics(ScreenFormFactor.MOBILE, 590, 800)
         assert metrics.width == 420.0
 
@@ -129,10 +129,10 @@ class TestDialogMetrics:
     def test_floor_and_chrome_are_constant(self):
         metrics = resolve_dialog_metrics(ScreenFormFactor.DESKTOP, 1280, 800)
         assert metrics.min_height == 260.0
-        assert metrics.chrome_height == 240.0
+        assert metrics.chrome_height == 280.0
 
     def test_resolved_on_app_layout(self):
         layout = app_layout_resolver(1280, 800)
-        assert layout.dialog_metrics.width == 420.0
+        assert layout.dialog_metrics.width == 500.0
         layout = app_layout_resolver(360, 800)
-        assert layout.dialog_metrics.width == 360 * 0.92
+        assert layout.dialog_metrics.width == 360 * 0.88

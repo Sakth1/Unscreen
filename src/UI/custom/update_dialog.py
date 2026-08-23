@@ -603,31 +603,41 @@ class UpdateDialog(ft.Stack):
 
         installable = is_packaged() and not update.is_manual_only
         install_btn = ft.FilledButton(
-            "Download & install",
+            "Download and install",
             icon=ft.Icons.DOWNLOAD,
             on_click=self._begin_install,
         )
         cancel_btn = ft.TextButton("Cancel", on_click=self._later)
-        releases_btn = ft.TextButton("Open releases page", on_click=self._open_releases)
         later_btn = ft.TextButton("Later", on_click=self._later)
         self._cancel_btn = cancel_btn
         self._actions_buttons = (
-            [releases_btn, later_btn, install_btn]
+            [later_btn, install_btn]
             if installable
-            else [later_btn, releases_btn]
+            else [
+                later_btn,
+                ft.TextButton("Open releases page", on_click=self._open_releases),
+            ]
         )
-        actions = ft.Row(
-            wrap=True,
-            alignment=ft.MainAxisAlignment.END,
-            spacing=8,
-            controls=self._actions_buttons,
+        footer = ft.Container(
+            content=ft.Row(
+                alignment=ft.MainAxisAlignment.END,
+                spacing=8,
+                controls=self._actions_buttons,
+            ),
+            padding=ft.padding.Padding.only(top=12),
+        )
+
+        scrollable = ft.Column(
+            controls=[header, details, self._progress],
+            expand=True,
+            spacing=12,
+            scroll=ft.ScrollMode.AUTO,
         )
 
         content = ft.Column(
-            controls=[header, details, self._progress, actions],
-            tight=True,
-            spacing=12,
-            scroll=ft.ScrollMode.AUTO,
+            controls=[scrollable, footer],
+            expand=True,
+            spacing=0,
         )
         width, height = _surface_dimensions(metrics, notes)
         self._surface = ft.Container(

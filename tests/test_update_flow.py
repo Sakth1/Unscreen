@@ -38,7 +38,7 @@ def test_write_watchdog_contains_pid_and_app(tmp_path):
     text = raw.decode("ascii")
     assert "4242" in text
     assert r"unscreen.exe" in text
-    assert 'start "" "%APP%"' in text
+    assert 'start "" /d "%APPDIR%" "%APP%"' in text
     assert 'del "%~f0"' in text
     assert b"\r\n" in raw
     assert not raw.startswith(b"\xff\xfe")
