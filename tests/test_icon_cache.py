@@ -3,7 +3,7 @@
 import sqlite3
 import time
 
-from core.icons.icon_cache import IconCache, _MAX_AGE_S
+from core.icons.icon_cache import IconCache
 
 
 def _make_cache(tmp_path) -> tuple[IconCache, sqlite3.Connection]:

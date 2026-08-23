@@ -434,7 +434,7 @@ class TestPackageIconPng:
 
     def test_returns_none_on_exception(self, monkeypatch):
         """Any jnius/activity error collapses to None."""
-        from unittest.mock import MagicMock, patch
+        from unittest.mock import MagicMock
 
         # Mock get_activity to return a non-None value, then make jnius fail
         mock_activity = MagicMock()

@@ -78,7 +78,7 @@ def package_icon_png(package: str, size: int = 96) -> bytes | None:
         if activity is None:
             return None
 
-        from jnius import autoclass
+        from jnius import autoclass  # type: ignore
 
         Bitmap = autoclass("android.graphics.Bitmap")
         Canvas = autoclass("android.graphics.Canvas")
@@ -137,7 +137,6 @@ def exe_icon_png(exe_path: str, size: int = 48) -> bytes | None:
         return None
     try:
         import ctypes
-        from ctypes import wintypes
 
         hicon = _extract_icon_handle(exe_path)
         if hicon is None:

@@ -10,14 +10,11 @@ Run: ``uv run pytest tests/chaos -m chaos``
 
 from __future__ import annotations
 
-import hashlib
 import sqlite3
-import struct
 import time
-import zlib
 
 import pytest
-from chaos_helpers import ChaosRun, finding_key
+from chaos_helpers import ChaosRun
 
 from core.config_manager import ConfigManager
 from core.icons.icon_cache import IconCache
