@@ -1065,6 +1065,17 @@ async def entrypoint(page: ft.Page):
     if _main_mod and hasattr(_main_mod, "_bootstrap_done"):
         _main_mod._bootstrap_done.set()
 
+    # Clear the bootstrap-retried flag so the watchdog is available again
+    # on future cold starts (next update cycle).
+    try:
+        from pathlib import Path
+
+        retried = Path(get_data_dir()) / ".bootstrap_retried"
+        if retried.exists():
+            retried.unlink(missing_ok=True)
+    except Exception:
+        pass
+
     _write_launch_diagnostics()
 
     # Elapsed-ms since process start — proves how long the handshake took.
