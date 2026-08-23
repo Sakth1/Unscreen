@@ -15,7 +15,7 @@ from utils.time_utils import utc_timestamp
 
 logger = logging.getLogger(__name__)
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Pre-v8 databases are structurally incompatible with the current schema
 # (16-byte BLOB hash, sessions table without event_id, no status_sessions).

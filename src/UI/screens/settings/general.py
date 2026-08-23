@@ -91,6 +91,11 @@ class General(ft.Container):
             label="Hide system apps in usage",
             on_change=self._on_hide_system_changed,
         )
+        self._favicon_switch = ft.Switch(
+            value=self._config.fetch_favicons,
+            label="Fetch app icons from the internet",
+            on_change=self._on_favicon_changed,
+        )
         self._hidden_keys_field = ft.TextField(
             value=", ".join(self._config.hidden_app_keys),
             label="Also hide (comma-separated app keys)",
@@ -158,6 +163,7 @@ class General(ft.Container):
                 "Usage",
                 [
                     self._hide_system_switch,
+                    self._favicon_switch,
                     self._hidden_keys_field,
                 ],
             ),
@@ -261,6 +267,11 @@ class General(ft.Container):
         self._config.hide_system_apps = bool(getattr(event.control, "value", False))
         self._config.save()
         self._toast("Usage totals update immediately")
+
+    def _on_favicon_changed(self, event: ft.ControlEvent) -> None:
+        self._config.fetch_favicons = bool(getattr(event.control, "value", False))
+        self._config.save()
+        self._toast("Icon fetching will apply on the next dashboard refresh")
 
     def _on_hidden_keys_changed(self, event: ft.ControlEvent) -> None:
         raw = getattr(event.control, "value", "") or ""
@@ -367,6 +378,7 @@ class General(ft.Container):
         self._collection_switch.value = self._config.collection_enabled
         self._url_switch.value = self._config.url_extraction_enabled
         self._hide_system_switch.value = self._config.hide_system_apps
+        self._favicon_switch.value = self._config.fetch_favicons
         self._hidden_keys_field.value = ", ".join(self._config.hidden_app_keys)
         self._autostart_switch.value = self._config.auto_start_enabled
         self._maximized_switch.value = self._config.start_maximized

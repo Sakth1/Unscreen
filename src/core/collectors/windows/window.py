@@ -39,10 +39,15 @@ class WindowAnalyzer:
             try:
                 proc = psutil.Process(pid.value)
                 app = proc.name()
+                try:
+                    exe_path = proc.exe()
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    exe_path = None
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 app = "unknown"
+                exe_path = None
 
-            return {"app": app, "title": title, "pid": pid.value}
+            return {"app": app, "title": title, "pid": pid.value, "exe_path": exe_path}
         except Exception:
             logger.exception("Window analysis failed")
             return None

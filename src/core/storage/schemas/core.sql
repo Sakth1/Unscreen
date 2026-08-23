@@ -161,3 +161,16 @@ CREATE TABLE IF NOT EXISTS sync_cursors (
     remote_device_id TEXT PRIMARY KEY,
     last_synced_at   INTEGER NOT NULL        -- Unix epoch ms (UTC)
 );
+
+-- Schema v9 — App icon cache
+-- Resolved icons are cached to avoid re-extraction on every dashboard load.
+-- Entries older than 30 days are evicted on each cache pass. Fingerprints
+-- track staleness so an app update/move triggers re-extraction.
+CREATE TABLE IF NOT EXISTS app_icons (
+    app_key     TEXT PRIMARY KEY,
+    source      TEXT NOT NULL,          -- 'android_package' | 'windows_exe' | 'site_favicon'
+    fingerprint TEXT NOT NULL,
+    png         BLOB NOT NULL,
+    width       INTEGER NOT NULL,
+    updated_at  INTEGER NOT NULL       -- Unix epoch ms (UTC)
+);
