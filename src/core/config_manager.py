@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_CONFIG = {
     "collection_enabled": True,
     "url_extraction_enabled": True,
+    "fetch_favicons": True,
     "tick_interval_overrides": {},
     "watchers_enabled": ["foreground", "afk"],
     "log_level": "INFO",
@@ -157,6 +158,14 @@ class ConfigManager:
     @url_extraction_enabled.setter
     def url_extraction_enabled(self, value: bool) -> None:
         self._data["url_extraction_enabled"] = value
+
+    @property
+    def fetch_favicons(self) -> bool:
+        return bool(self._data.get("fetch_favicons", True))
+
+    @fetch_favicons.setter
+    def fetch_favicons(self, value: bool) -> None:
+        self._data["fetch_favicons"] = bool(value)
 
     @property
     def auto_start_enabled(self) -> bool:

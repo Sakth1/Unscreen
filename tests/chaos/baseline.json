@@ -11,6 +11,9 @@
     "utils.versions.compare_versions:AttributeError",
     "utils.versions.normalize_version:AttributeError",
     "utils.versions.parse_version:AttributeError",
-    "utils.win32.acquire_instance_mutex:ArgumentError"
+    "utils.win32.acquire_instance_mutex:ArgumentError",
+    "core.application.system_apps.effective_system_keys:AttributeError",
+    "core.storage.get_raw_events:JSONDecodeError",
+    "core.storage.get_latest_battery:JSONDecodeError"
   ]
 }

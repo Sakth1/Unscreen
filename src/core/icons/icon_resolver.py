@@ -1,13 +1,13 @@
-"""Site-bucket favicon resolution with graceful fallback (F9c).
+"""Icon resolution for the dashboard (site favicons, Windows exe icons, Android package icons).
 
 Browser site buckets (``browser:youtube``, ``browser:github``, ...) get a
-real icon where possible. Fallback chain for a site row:
+real icon via DuckDuckGo's favicon endpoint. Windows executables get
+their shell icon via ``ExtractIconExW`` (ctypes). Android packages get
+their icon via ``PackageManager.getApplicationIcon`` (jnius).
 
-    DDG favicon -> None (the colored-initial avatar stays)
+Fallback chain for every row:
 
-The general ``Browser`` bucket (``app_key == "browser"``) has no favicon;
-it keeps the colored-initial avatar until the Windows exe-icon stage
-lands (see docs/app-icons-research.md).
+    platform icon -> site favicon -> None (colored-initial avatar stays)
 
 DuckDuckGo's ``ip3`` endpoint serves PNG for some domains and ICO
 (featuring 32-bpp BMP DIB entries) for others. Flutter cannot decode ICO,
@@ -46,6 +46,8 @@ def site_key_to_domain(app_key: str) -> str | None:
     Returns ``None`` for the general ``browser`` bucket, for keys whose
     site is not a known normalized site, and for regular app keys.
     """
+    if not isinstance(app_key, str):
+        return None
     if not app_key.startswith("browser:"):
         return None
     return _DOMAIN_BY_NAME.get(app_key[len("browser:") :])
@@ -56,6 +58,177 @@ def is_site_bucket(app_key: str) -> bool:
     return site_key_to_domain(app_key) is not None
 
 
+# ---------------------------------------------------------------------------
+# Android package icon extraction
+# ---------------------------------------------------------------------------
+
+
+def package_icon_png(package: str, size: int = 96) -> bytes | None:
+    """PNG bytes for an Android package's launcher icon, or ``None``.
+
+    Uses ``PackageManager.getApplicationIcon()`` via jnius to retrieve the
+    app's ``Drawable``, renders it into an ARGB_8888 ``Bitmap``, and
+    compresses to PNG. Returns ``None`` off-Android or on any failure so
+    the caller can fall back to colored-initial avatars.
+    """
+    try:
+        from utils.android import get_activity
+
+        activity = get_activity()
+        if activity is None:
+            return None
+
+        from jnius import autoclass  # type: ignore
+
+        Bitmap = autoclass("android.graphics.Bitmap")
+        Canvas = autoclass("android.graphics.Canvas")
+        ByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
+
+        pm = activity.getPackageManager()
+        icon = pm.getApplicationIcon(package)
+        bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        canvas = Canvas(bmp)
+        icon.setBounds(0, 0, size, size)
+        icon.draw(canvas)
+        out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        return bytes(out.toByteArray())
+    except Exception:
+        logger.debug("package_icon_png failed for %s", package, exc_info=True)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Windows exe icon extraction
+# ---------------------------------------------------------------------------
+
+_icon_shell32 = None
+_icon_user32 = None
+_icon_gdi32 = None
+
+
+def _ensure_win_dlls():
+    """Lazy-load Windows DLLs (ctypes). No-op off-Windows."""
+    global _icon_shell32, _icon_user32, _icon_gdi32
+    if _icon_shell32 is not None:
+        return True
+    try:
+        import ctypes
+
+        _icon_shell32 = ctypes.windll.shell32
+        _icon_user32 = ctypes.windll.user32
+        _icon_gdi32 = ctypes.windll.gdi32
+        return True
+    except (AttributeError, OSError):
+        return False
+
+
+def exe_icon_png(exe_path: str, size: int = 48) -> bytes | None:
+    """PNG bytes for a Windows executable's shell icon, or ``None``.
+
+    Extracts the icon via ``ExtractIconExW``, renders it into a 32-bpp
+    ``CreateDIBSection`` with ``DrawIconEx`` (alpha-aware), and encodes
+    PNG with the pure-Python ``_png_from_rgba`` encoder. Falls back to
+    ``SHGetFileInfoW`` when ``ExtractIconExW`` returns no handles.
+
+    Returns ``None`` off-Windows, on missing files, or on any failure.
+    """
+    if not _ensure_win_dlls():
+        return None
+    try:
+        import ctypes
+
+        hicon = _extract_icon_handle(exe_path)
+        if hicon is None:
+            return None
+
+        # Create a 32-bpp top-down DIB for direct pixel access.
+        hdc = _icon_gdi32.CreateCompatibleDC(None)
+        bmi = ctypes.create_string_buffer(40)
+        ctypes.memset(bmi, 0, 40)
+        struct.pack_into(
+            "IIiiIIIIII", bmi, 0, 40, size, size, 1, 32, 0, 0, 0, 0, 0, 0
+        )
+        bits = ctypes.c_void_p()
+        hbmp = _icon_gdi32.CreateDIBSection(hdc, bmi, 0, ctypes.byref(bits), None, 0)
+        old = _icon_gdi32.SelectObject(hdc, hbmp)
+        _icon_user32.DrawIconEx(hdc, 0, 0, hicon, size, size, 0, None, 3)  # DI_NORMAL
+        _icon_gdi32.SelectObject(hdc, old)
+
+        # Read BGRA pixel buffer, flip to top-down, encode as PNG.
+        bgra = ctypes.string_at(bits, size * size * 4)
+        png = _encode_bgra_png(bgra, size)
+
+        _icon_gdi32.DeleteObject(hbmp)
+        _icon_gdi32.DeleteDC(hdc)
+        _icon_user32.DestroyIcon(hicon)
+        return png
+    except Exception:
+        logger.debug("exe_icon_png failed for %s", exe_path, exc_info=True)
+        return None
+
+
+def _extract_icon_handle(exe_path: str):
+    """Return an HICON for *exe_path*, or ``None``.
+
+    Tries ``ExtractIconExW`` first (best quality), then falls back to
+    ``SHGetFileInfoW`` with ``SHGFI_ICON | SHGFI_SHELLICONSIZE``.
+    """
+    import ctypes
+    from ctypes import wintypes
+
+    # Primary: ExtractIconExW
+    large = (ctypes.c_void_p * 1)()
+    small = (ctypes.c_void_p * 1)()
+    n = _icon_shell32.ExtractIconExW(exe_path, 0, large, small, 1)
+    if n >= 1:
+        return large[0] or small[0]
+
+    # Fallback: SHGetFileInfoW
+    try:
+        class SHFILEINFOW(ctypes.Structure):
+            _fields_ = [
+                ("hIcon", wintypes.HANDLE),
+                ("iIcon", ctypes.c_int),
+                ("dwAttributes", wintypes.DWORD),
+                ("szDisplayName", ctypes.c_wchar * 260),
+                ("szTypeName", ctypes.c_wchar * 80),
+            ]
+
+        SHGFI_ICON = 0x000000100
+        SHGFI_SHELLICONSIZE = 0x000000004
+        SHGFI_USEFILEATTRIBUTES = 0x000000010
+        FILE_ATTRIBUTE_NORMAL = 0x00000080
+
+        info = SHFILEINFOW()
+        ret = _icon_shell32.SHGetFileInfoW(
+            exe_path,
+            FILE_ATTRIBUTE_NORMAL,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+            SHGFI_ICON | SHGFI_SHELLICONSIZE | SHGFI_USEFILEATTRIBUTES,
+        )
+        if ret and info.hIcon:
+            return info.hIcon
+    except Exception:
+        pass
+    return None
+
+
+def _encode_bgra_png(bgra: bytes, size: int) -> bytes:
+    """Encode a raw BGRA pixel buffer (bottom-up) as a top-down PNG."""
+    if size <= 0 or size > 4096:
+        return b""
+    rgba = bytearray(size * size * 4)
+    for y in range(size):
+        row_in = bgra[y * size * 4 : (y + 1) * size * 4]
+        row_out = (size - 1 - y) * size * 4
+        for x in range(size):
+            b, g, r, a = row_in[x * 4 : x * 4 + 4]
+            rgba[row_out + x * 4 : row_out + x * 4 + 4] = (r, g, b, a)
+    return _png_from_rgba(bytes(rgba), size, size)
+
+
 def fetch_site_favicon(app_key: str) -> bytes | None:
     """PNG bytes for a site bucket, or ``None`` when unavailable.
 
@@ -63,6 +236,8 @@ def fetch_site_favicon(app_key: str) -> bytes | None:
     avatar. Network errors, unknown domains, and undecodable payloads all
     collapse to ``None`` so the dashboard never shows a broken image.
     """
+    if not isinstance(app_key, str):
+        return None
     domain = site_key_to_domain(app_key)
     if domain is None:
         return None
@@ -232,6 +407,8 @@ def _png_from_rgba(rgba: bytes, width: int, height: int) -> bytes:
             + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
         )
 
+    if width <= 0 or height <= 0 or width > 4096 or height > 4096:
+        return b""
     raw = b"".join(
         b"\x00" + rgba[y * width * 4 : (y + 1) * width * 4] for y in range(height)
     )

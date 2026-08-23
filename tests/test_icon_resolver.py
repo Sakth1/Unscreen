@@ -1,6 +1,6 @@
-"""Tests for site-bucket favicon resolution with graceful fallback (F9c).
+"""Tests for icon resolution (site favicons, Windows exe icons, Android package icons).
 
-The fallback chain under test: favicon (PNG or ICO -> PNG) -> ``None``,
+The fallback chain under test: platform icon -> site favicon -> ``None``,
 where ``None`` means the caller keeps the colored-initial avatar.
 """
 
@@ -10,9 +10,11 @@ import zlib
 
 from core.icons import icon_resolver
 from core.icons.icon_resolver import (
+    exe_icon_png,
     fetch_site_favicon,
     ico_to_png,
     is_site_bucket,
+    package_icon_png,
     site_key_to_domain,
 )
 
@@ -417,3 +419,61 @@ class TestFetchSiteFavicon:
         png = icon_resolver._png_from_rgba(rgba, 2, 2)
         _w, _h, decoded = _decode_png(png)
         assert decoded == rgba
+
+
+# ---------------------------------------------------------------------------
+# package_icon_png (Android)
+# ---------------------------------------------------------------------------
+
+
+class TestPackageIconPng:
+    def test_returns_none_off_android(self):
+        """Off-Android, get_activity() returns None so the function bails out."""
+        result = package_icon_png("com.google.android.youtube")
+        assert result is None
+
+    def test_returns_none_on_exception(self, monkeypatch):
+        """Any jnius/activity error collapses to None."""
+        from unittest.mock import MagicMock
+
+        # Mock get_activity to return a non-None value, then make jnius fail
+        mock_activity = MagicMock()
+        monkeypatch.setattr(
+            "utils.android.get_activity",
+            lambda: mock_activity,
+        )
+        # Simulate jnius import failure
+        import builtins
+
+        real_import = builtins.__import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "jnius":
+                raise ImportError("no jnius")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", fake_import)
+        assert package_icon_png("com.example.app") is None
+
+
+# ---------------------------------------------------------------------------
+# exe_icon_png (Windows)
+# ---------------------------------------------------------------------------
+
+
+class TestExeIconPng:
+    def test_returns_none_for_missing_exe(self):
+        """Missing exe path returns None gracefully."""
+        result = exe_icon_png("C:\\nonexistent\\fake.exe")
+        assert result is None
+
+    def test_returns_none_off_windows(self):
+        """Off-Windows, _ensure_win_dlls() returns False so the function bails out."""
+        # On non-Windows, _ensure_win_dlls always returns False
+        result = exe_icon_png("/usr/bin/ls")
+        assert result is None
+
+    def test_returns_none_on_bad_path(self):
+        """Empty or garbage path returns None."""
+        assert exe_icon_png("") is None
+        assert exe_icon_png("\x00\x00\x00") is None

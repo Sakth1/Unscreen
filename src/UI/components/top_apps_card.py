@@ -9,10 +9,13 @@ dashboard reads colorful at a glance.
 Tapping anywhere on the card (F9b) opens an all-apps dialog listing
 every app in the range, not just the top-N slice.
 
-Browser site buckets (``browser:youtube``, ...) resolve a real favicon
-in the background (F9c) and render it in the row avatar; the fallback
-chain is favicon -> colored-initial avatar, so a missing or failed
-icon never leaves a broken image.
+App icons are resolved in the background (F9c) for all app types:
+- Browser site buckets (``browser:youtube``, ...) get favicons from DuckDuckGo.
+- Android packages get their launcher icon via ``PackageManager``.
+- Windows executables get their shell icon via ``ExtractIconExW``.
+
+The fallback chain is: platform icon -> site favicon -> colored-initial
+avatar, so a missing or failed icon never leaves a broken image.
 
 flet 0.86 ships no chart controls, so the donut is a determinate
 ``ft.ProgressRing`` (the arc sweeps the share, the remainder renders as
@@ -36,13 +39,20 @@ import flet as ft
 
 from core.analytics import AnalyticsStore, AppTotal
 from core.config_manager import ConfigManager
-from core.icons.icon_resolver import fetch_site_favicon, is_site_bucket
+from core.icons.icon_cache import IconCache
+from core.icons.icon_resolver import (
+    exe_icon_png,
+    fetch_site_favicon,
+    is_site_bucket,
+    package_icon_png,
+)
 from core.storage import Storage
 from UI.components.card_section import CardSection
 from UI.components.data_section import DataSection
 from UI.components.empty_state import EmptyState
 from UI.components.skeleton import list_row_skeleton
 from utils.flet_helpers import safe_pop_dialog, safe_update
+from utils.platform import OSType, detect_os
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +337,8 @@ class TopAppsCard(CardSection):
         self._rows: list[AppTotal] = []
         self._icons: dict[str, bytes] = {}
         self._icon_failed: set[str] = set()
+        self._icon_cache: IconCache | None = None
+        self._config: ConfigManager | None = None
 
     def _render_rows(self, rows: list[AppTotal]) -> ft.Control:
         """Content builder: remember the rows, render with current icons.
@@ -384,13 +396,16 @@ class TopAppsCard(CardSection):
         safe_pop_dialog(page)
         self._dialog = None
 
-    async def _load_site_icons(self) -> None:
-        """Resolve favicons for the card's site buckets in the background.
+    async def _load_icons(self) -> None:
+        """Resolve icons for the card's apps in the background.
 
-        Fetches run off the UI thread (``asyncio.to_thread``); failures
-        are remembered so a dead favicon is not re-fetched on every
-        dashboard refresh. Newly resolved icons re-render the section in
-        place; unresolved rows keep the colored-initial fallback.
+        Processes all app types: site buckets (DuckDuckGo favicons),
+        Android packages (PackageManager icons), and Windows executables
+        (shell icons via ExtractIconExW). Fetches run off the UI thread
+        (``asyncio.to_thread``); failures are remembered so a dead icon
+        is not re-fetched on every dashboard refresh. Newly resolved icons
+        re-render the section in place; unresolved rows keep the
+        colored-initial fallback.
         """
         try:
             rows = fetch_range(
@@ -405,13 +420,9 @@ class TopAppsCard(CardSection):
         found: dict[str, bytes] = {}
         for row in rows:
             key = row.app_key
-            if (
-                not is_site_bucket(key)
-                or key in self._icons
-                or key in self._icon_failed
-            ):
+            if key in self._icons or key in self._icon_failed:
                 continue
-            png = await asyncio.to_thread(fetch_site_favicon, key)
+            png = await asyncio.to_thread(self._resolve_icon, key)
             if png is not None:
                 found[key] = png
             else:
@@ -421,12 +432,119 @@ class TopAppsCard(CardSection):
         self._icons.update(found)
         await self._section.run(show_placeholder=False)
 
+    def _resolve_icon(self, app_key: str) -> bytes | None:
+        """Resolve an icon for *app_key* via cache, platform, or network.
+
+        Dispatch order:
+        1. Cache hit (fresh entry < 30 days) -> return cached PNG
+        2. Site bucket -> DuckDuckGo favicon
+        3. Android package -> PackageManager icon (off-Android returns None)
+        4. Windows exe -> ExtractIconExW shell icon (off-Windows returns None)
+        5. Return None (initials fallback)
+        """
+        cache = self._ensure_icon_cache()
+        config = self._ensure_config()
+
+        # 1. Cache hit
+        if cache is not None:
+            cached = cache.get(app_key)
+            if cached is not None:
+                return cached
+
+        # 2. Site bucket -> DuckDuckGo favicon (network, respects config toggle)
+        if is_site_bucket(app_key):
+            if config.fetch_favicons:
+                png = fetch_site_favicon(app_key)
+                if png is not None and cache is not None:
+                    import hashlib
+
+                    fp = hashlib.sha256(app_key.encode()).hexdigest()
+                    cache.put(app_key, "site_favicon", fp, png, 48)
+                return png
+            return None
+
+        # 3. Android package icon (local, no network)
+        if detect_os() == OSType.ANDROID:
+            png = package_icon_png(app_key)
+            if png is not None and cache is not None:
+                cache.put(app_key, "android_package", app_key, png, 96)
+            return png
+
+        # 4. Windows exe icon (local, no network)
+        if detect_os() == OSType.WINDOWS:
+            exe_path = self._lazy_resolve_exe_path(app_key)
+            if exe_path is not None:
+                png = exe_icon_png(exe_path)
+                if png is not None and cache is not None:
+                    import hashlib
+
+                    fp = hashlib.sha256(exe_path.encode()).hexdigest()
+                    cache.put(app_key, "windows_exe", fp, png, 48)
+                return png
+
+        return None
+
+    def _lazy_resolve_exe_path(self, app_key: str) -> str | None:
+        """Find exe_path for *app_key* via session payload or lazy psutil lookup.
+
+        Checks the most recent app_session payload for ``exe_path`` first.
+        If not found, attempts a ``psutil`` lookup by process name (may fail
+        for dead processes). Returns ``None`` on any failure so the caller
+        falls back to initials.
+        """
+        # Try session payload first
+        try:
+            store = self._lazy_store()
+            sessions = store._storage.get_app_sessions(
+                app_key=app_key, limit=1
+            )
+            for session in sessions:
+                exe_path = session.get("payload", {}).get("exe_path")
+                if exe_path:
+                    return exe_path
+        except Exception:
+            pass
+
+        # Lazy psutil lookup (may fail for dead processes)
+        try:
+            import psutil
+
+            for proc in psutil.process_iter(["name", "exe"]):
+                try:
+                    if proc.info["name"] == app_key:
+                        return proc.info["exe"]
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+        except Exception:
+            pass
+
+        return None
+
+    def _ensure_icon_cache(self) -> IconCache | None:
+        """Lazily create the IconCache from the store's connection."""
+        if self._icon_cache is not None:
+            return self._icon_cache
+        try:
+            storage = self._lazy_store()._storage
+            self._icon_cache = IconCache(storage._conn)
+            return self._icon_cache
+        except Exception:
+            return None
+
+    def _ensure_config(self) -> ConfigManager:
+        """Lazily load the ConfigManager."""
+        if self._config is not None:
+            return self._config
+        self._config = ConfigManager()
+        self._config.load()
+        return self._config
+
     async def run(self, show_placeholder: bool = True) -> None:
         """Start (or re-run) the card's data load.
 
         Headless construction (no store, not yet attached) is a no-op so
         the lifecycle sweep never opens a real database. After the rows
-        render, site-bucket favicons resolve in the background (F9c).
+        render, app icons resolve in the background (F9c).
         """
         if self._store is None and self.parent is None:
             return
@@ -434,9 +552,9 @@ class TopAppsCard(CardSection):
         page = self._current_page()
         if page is not None:
             try:
-                page.run_task(self._load_site_icons)
+                page.run_task(self._load_icons)
             except Exception:
-                logger.debug("Failed to schedule site-icon pass", exc_info=True)
+                logger.debug("Failed to schedule icon pass", exc_info=True)
 
     def _lazy_store(self) -> AnalyticsStore:
         if self._store is None:
