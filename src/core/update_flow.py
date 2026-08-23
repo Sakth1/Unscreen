@@ -77,6 +77,12 @@ def write_relaunch_watchdog(
     lines = [
         "@echo off",
         "setlocal",
+        # Purge stale FLET transport tokens inherited from the old process.
+        # The host sets its own FLET_DART_BRIDGE_PORT; an inherited value
+        # pointing at a dead VM's keyed channel causes the bridge handshake
+        # to stall permanently (blank window, no entrypoint).
+        "set FLET_DART_BRIDGE_PORT=",
+        "set FLET_SERVER_PORT=",
         f'set "TARGETPID={pid}"',
         f'set "TARGETPID2={previous}"',
         f'set "APP={app}"',

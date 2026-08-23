@@ -1057,9 +1057,22 @@ class App:
 
 
 async def entrypoint(page: ft.Page):
+    # Signal the bootstrap watchdog in main.py that we connected.
+    import sys as _sys
+    import time as _time
+
+    _main_mod = _sys.modules.get("__main__")
+    if _main_mod and hasattr(_main_mod, "_bootstrap_done"):
+        _main_mod._bootstrap_done.set()
+
     _write_launch_diagnostics()
-    _write_startup_log("entrypoint called")
-    logger.info("entrypoint called: page=%s", page)
+
+    # Elapsed-ms since process start — proves how long the handshake took.
+    _elapsed = None
+    if _main_mod and hasattr(_main_mod, "_APP_START_TIME"):
+        _elapsed = round((_time.monotonic() - _main_mod._APP_START_TIME) * 1000)
+    _write_startup_log(f"entrypoint called (elapsed_ms={_elapsed})")
+    logger.info("entrypoint called: page=%s elapsed_ms=%s", page, _elapsed)
     try:
         _write_startup_log("creating App instance")
         logger.info("Creating App instance...")
