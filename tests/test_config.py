@@ -353,3 +353,25 @@ class TestConfigProperties:
         assert cm2.collection_enabled is False
         assert cm2.watchers_enabled == ["foreground", "afk"]
         assert cm2.log_level == "INFO"
+
+    def test_fetch_favicons_default_and_roundtrip(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        cm = ConfigManager(path=str(tmp_path / "config.json"))
+        assert cm.fetch_favicons is True
+        cm.fetch_favicons = False
+        assert cm.fetch_favicons is False
+        cm.save()
+
+        cm2 = ConfigManager(path=str(tmp_path / "config.json"))
+        cm2.load()
+        assert cm2.fetch_favicons is False
+
+    def test_fetch_favicons_from_file(self, tmp_path):
+        from core.config_manager import ConfigManager
+
+        p = tmp_path / "config.json"
+        p.write_text(json.dumps({"fetch_favicons": False}), encoding="utf-8")
+        cm = ConfigManager(path=str(p))
+        cm.load()
+        assert cm.fetch_favicons is False
