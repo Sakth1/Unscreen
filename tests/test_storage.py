@@ -543,7 +543,7 @@ class TestSchemaMigration:
     def test_fresh_db_gets_current_version(self, tmp_path):
         db = str(tmp_path / "test.db")
         storage = Storage(db_path=db)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         storage.close()
 
     def test_migration_skipped_when_up_to_date(self, tmp_path):
@@ -554,7 +554,7 @@ class TestSchemaMigration:
         storage1.close()
 
         storage2 = Storage(db_path=db)
-        assert storage2._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage2._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         events = storage2.get_raw_events()
         assert len(events) == 1
         assert events[0]["payload"]["app"] == "Code.exe"
@@ -564,7 +564,7 @@ class TestSchemaMigration:
         db = str(tmp_path / "test.db")
         for i in range(5):
             storage = Storage(db_path=db)
-            assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+            assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
             if i == 0:
                 _write_fg_event(storage)
             storage.close()
@@ -596,7 +596,7 @@ class TestSchemaMigration:
         conn.close()
 
         storage = Storage(db_path=db)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         _assert_schema_v8(storage._conn)
         assert len(storage.get_raw_events()) == 0, "pre-v7 data must be wiped"
         storage.close()
@@ -620,7 +620,7 @@ class TestSchemaMigration:
 
         storage = Storage(db_path=db)
         _assert_schema_v8(storage._conn)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         storage.close()
 
     def test_v1_db_is_wiped_and_recreated(self, tmp_path):
@@ -637,7 +637,7 @@ class TestSchemaMigration:
 
         storage = Storage(db_path=db)
         _assert_schema_v8(storage._conn)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         storage.close()
 
     def test_interrupted_migration_recovery(self, tmp_path):
@@ -664,7 +664,7 @@ class TestSchemaMigration:
         conn.close()
 
         storage = Storage(db_path=db)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         _assert_schema_v8(storage._conn)
         storage.close()
 
@@ -693,7 +693,7 @@ class TestSchemaMigration:
         monkeypatch.setattr("core.storage.is_android", lambda: True)
 
         storage = Storage(db_path=db)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         assert deleted == [db]
         storage.close()
 
@@ -711,7 +711,7 @@ class TestSchemaMigration:
 
         storage = Storage(db_path=db)
         try:
-            assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+            assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
             _assert_schema_v8(storage._conn)
         finally:
             storage.close()
@@ -743,12 +743,12 @@ class TestSchemaMigration:
         db = str(tmp_path / "test.db")
         storage = Storage(db_path=db)
         _assert_schema_v8(storage._conn)
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         storage.close()
 
     def test_migration_on_memory_db(self):
         storage = Storage(db_path=":memory:")
-        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert storage._conn.execute("PRAGMA user_version").fetchone()[0] == 9
         _assert_schema_v8(storage._conn)
         storage.close()
 
