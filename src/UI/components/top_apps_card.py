@@ -417,6 +417,8 @@ class TopAppsCard(CardSection):
         except Exception:
             logger.debug("Icon pass: range load failed", exc_info=True)
             return
+        keys = [r.app_key for r in rows if r.app_key not in self._icons and r.app_key not in self._icon_failed]
+        logger.info("Icon pass started: %d new keys to resolve", len(keys))
         found: dict[str, bytes] = {}
         for row in rows:
             key = row.app_key
@@ -427,6 +429,12 @@ class TopAppsCard(CardSection):
                 found[key] = png
             else:
                 self._icon_failed.add(key)
+        logger.info(
+            "Icon pass done: %d resolved, %d failed, %d cached",
+            len(found),
+            len(keys) - len(found),
+            len(self._icons) - len(found),
+        )
         if not found:
             return
         self._icons.update(found)
@@ -449,11 +457,13 @@ class TopAppsCard(CardSection):
         if cache is not None:
             cached = cache.get(app_key)
             if cached is not None:
+                logger.debug("Icon cache hit: %s", app_key)
                 return cached
 
         # 2. Site bucket -> DuckDuckGo favicon (network, respects config toggle)
         if is_site_bucket(app_key):
             if config.fetch_favicons:
+                logger.info("Icon site favicon: %s", app_key)
                 png = fetch_site_favicon(app_key)
                 if png is not None and cache is not None:
                     import hashlib
@@ -461,10 +471,12 @@ class TopAppsCard(CardSection):
                     fp = hashlib.sha256(app_key.encode()).hexdigest()
                     cache.put(app_key, "site_favicon", fp, png, 48)
                 return png
+            logger.info("Icon site bucket but fetch_favicons disabled: %s", app_key)
             return None
 
         # 3. Android package icon (local, no network)
         if detect_os() == OSType.ANDROID:
+            logger.info("Icon android pkg: %s", app_key)
             png = package_icon_png(app_key)
             if png is not None and cache is not None:
                 cache.put(app_key, "android_package", app_key, png, 96)
@@ -474,6 +486,7 @@ class TopAppsCard(CardSection):
         if detect_os() == OSType.WINDOWS:
             exe_path = self._lazy_resolve_exe_path(app_key)
             if exe_path is not None:
+                logger.info("Icon windows exe: %s -> %s", app_key, exe_path)
                 png = exe_icon_png(exe_path)
                 if png is not None and cache is not None:
                     import hashlib
@@ -481,7 +494,9 @@ class TopAppsCard(CardSection):
                     fp = hashlib.sha256(exe_path.encode()).hexdigest()
                     cache.put(app_key, "windows_exe", fp, png, 48)
                 return png
+            logger.info("Icon windows: no exe_path for %s", app_key)
 
+        logger.info("Icon fallback (initials): %s", app_key)
         return None
 
     def _lazy_resolve_exe_path(self, app_key: str) -> str | None:
@@ -503,7 +518,7 @@ class TopAppsCard(CardSection):
                 if exe_path:
                     return exe_path
         except Exception:
-            pass
+            logger.debug("Session exe_path lookup failed for %s", app_key, exc_info=True)
 
         # Lazy psutil lookup (may fail for dead processes)
         try:
@@ -516,7 +531,7 @@ class TopAppsCard(CardSection):
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     continue
         except Exception:
-            pass
+            logger.debug("psutil exe lookup failed for %s", app_key, exc_info=True)
 
         return None
 
@@ -529,6 +544,7 @@ class TopAppsCard(CardSection):
             self._icon_cache = IconCache(storage._conn)
             return self._icon_cache
         except Exception:
+            logger.warning("Icon cache unavailable", exc_info=True)
             return None
 
     def _ensure_config(self) -> ConfigManager:

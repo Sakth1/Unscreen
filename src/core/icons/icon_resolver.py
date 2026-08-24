@@ -135,6 +135,8 @@ def exe_icon_png(exe_path: str, size: int = 48) -> bytes | None:
     """
     if not _ensure_win_dlls():
         return None
+    if not isinstance(exe_path, str) or not exe_path.strip() or "\x00" in exe_path:
+        return None
     try:
         import ctypes
 
@@ -147,7 +149,7 @@ def exe_icon_png(exe_path: str, size: int = 48) -> bytes | None:
         bmi = ctypes.create_string_buffer(40)
         ctypes.memset(bmi, 0, 40)
         struct.pack_into(
-            "IIiiIIIIII", bmi, 0, 40, size, size, 1, 32, 0, 0, 0, 0, 0, 0
+            "<IiiHHIIiiII", bmi, 0, 40, size, size, 1, 32, 0, 0, 0, 0, 0, 0
         )
         bits = ctypes.c_void_p()
         hbmp = _icon_gdi32.CreateDIBSection(hdc, bmi, 0, ctypes.byref(bits), None, 0)
@@ -211,7 +213,7 @@ def _extract_icon_handle(exe_path: str):
         if ret and info.hIcon:
             return info.hIcon
     except Exception:
-        pass
+        logger.debug("SHGetFileInfoW fallback failed for %s", exe_path, exc_info=True)
     return None
 
 
@@ -255,6 +257,7 @@ def fetch_site_favicon(app_key: str) -> bytes | None:
         return data if _valid_png(data) else None
     if data.startswith(b"\x00\x00\x01\x00"):
         return ico_to_png(data)
+    logger.debug("favicon response not PNG/ICO for %s (starts with %r)", domain, data[:4])
     return None
 
 

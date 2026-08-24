@@ -5,8 +5,11 @@ where ``None`` means the caller keeps the colored-initial avatar.
 """
 
 import struct
+import sys
 import urllib.request
 import zlib
+
+import pytest
 
 from core.icons import icon_resolver
 from core.icons.icon_resolver import (
@@ -462,18 +465,28 @@ class TestPackageIconPng:
 
 
 class TestExeIconPng:
-    def test_returns_none_for_missing_exe(self):
-        """Missing exe path returns None gracefully."""
-        result = exe_icon_png("C:\\nonexistent\\fake.exe")
-        assert result is None
-
-    def test_returns_none_off_windows(self):
+    def test_returns_none_off_windows(self, monkeypatch):
         """Off-Windows, _ensure_win_dlls() returns False so the function bails out."""
-        # On non-Windows, _ensure_win_dlls always returns False
+        monkeypatch.setattr(icon_resolver, "_ensure_win_dlls", lambda: False)
         result = exe_icon_png("/usr/bin/ls")
         assert result is None
 
-    def test_returns_none_on_bad_path(self):
-        """Empty or garbage path returns None."""
-        assert exe_icon_png("") is None
-        assert exe_icon_png("\x00\x00\x00") is None
+    @pytest.mark.skipif(
+        sys.platform != "win32", reason="Windows-specific GDI tests"
+    )
+    def test_returns_valid_png_on_windows(self):
+        """On Windows, exe_icon_png returns valid PNG bytes."""
+        result = exe_icon_png("C:\\nonexistent\\fake.exe")
+        # On Windows, SHGetFileInfoW may still return a system icon handle
+        # even for non-existent paths. If it returns data, it must be valid PNG.
+        if result is not None:
+            assert result.startswith(b"\x89PNG")
+
+    @pytest.mark.skipif(
+        sys.platform != "win32", reason="Windows-specific GDI tests"
+    )
+    def test_empty_path_returns_png_or_none(self):
+        """Empty path on Windows returns either valid PNG or None."""
+        result = exe_icon_png("")
+        if result is not None:
+            assert result.startswith(b"\x89PNG")

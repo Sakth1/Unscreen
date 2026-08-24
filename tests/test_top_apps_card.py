@@ -251,7 +251,7 @@ class TestSiteIconWiring:
         monkeypatch.setattr(
             "UI.components.top_apps_card.fetch_site_favicon", fake_fetch
         )
-        await card._load_site_icons()
+        await card._load_icons()
         assert card._icons == {"browser:youtube": fake_png}
         assert "browser" not in card._icons
         # The section re-ran (a second store call) and re-rendered content.
@@ -278,8 +278,8 @@ class TestSiteIconWiring:
         monkeypatch.setattr(
             "UI.components.top_apps_card.fetch_site_favicon", fake_fetch
         )
-        await card._load_site_icons()
-        await card._load_site_icons()
+        await card._load_icons()
+        await card._load_icons()
         assert calls == ["browser:youtube"]
         assert "browser:youtube" in card._icon_failed
         assert card._icons == {}
@@ -298,8 +298,8 @@ class TestSiteIconWiring:
         monkeypatch.setattr(
             "UI.components.top_apps_card.fetch_site_favicon", fake_fetch
         )
-        await card._load_site_icons()
-        await card._load_site_icons()
+        await card._load_icons()
+        await card._load_icons()
         assert calls == ["browser:youtube"]
 
     @pytest.mark.asyncio
@@ -309,7 +309,7 @@ class TestSiteIconWiring:
         monkeypatch.setattr(
             "UI.components.top_apps_card.fetch_site_favicon", lambda k: None
         )
-        await card._load_site_icons()
+        await card._load_icons()
         assert card._icons == {}
 
 
