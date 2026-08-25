@@ -41,7 +41,11 @@ class WindowAnalyzer:
                 app = proc.name()
                 try:
                     exe_path = proc.exe()
-                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                except (
+                    psutil.NoSuchProcess,
+                    psutil.AccessDenied,
+                    psutil.ZombieProcess,
+                ):
                     exe_path = None
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 app = "unknown"

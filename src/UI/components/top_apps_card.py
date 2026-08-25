@@ -33,6 +33,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+import time
 from typing import Callable
 
 import flet as ft
@@ -68,6 +69,7 @@ _DEFAULT_LIMIT = 5
 _DONUT_SIZE = 32.0
 _DONUT_STROKE = 4.0
 _DAY_MS = 24 * 60 * 60 * 1000
+_ICON_RETRY_DELAY_S = 300  # 5 minutes before retrying failed icons
 
 #: Per-rank accent palette (F9): each top-apps row gets a distinct color so
 #: the dashboard reads colorful at a glance. Material 3 roles resolve in
@@ -336,7 +338,7 @@ class TopAppsCard(CardSection):
         self._dialog: ft.AlertDialog | None = None
         self._rows: list[AppTotal] = []
         self._icons: dict[str, bytes] = {}
-        self._icon_failed: set[str] = set()
+        self._icon_failed: dict[str, float] = {}
         self._icon_cache: IconCache | None = None
         self._config: ConfigManager | None = None
 
@@ -417,7 +419,20 @@ class TopAppsCard(CardSection):
         except Exception:
             logger.debug("Icon pass: range load failed", exc_info=True)
             return
-        keys = [r.app_key for r in rows if r.app_key not in self._icons and r.app_key not in self._icon_failed]
+        # Retry stale failures after 5 minutes so transient errors don't
+        # permanently blackhole an icon within a session.
+        now = time.time()
+        stale_cutoff = now - _ICON_RETRY_DELAY_S
+        stale_keys = [k for k, ts in self._icon_failed.items() if ts < stale_cutoff]
+        for k in stale_keys:
+            del self._icon_failed[k]
+        if stale_keys:
+            logger.info("Icon retry: %d stale failures cleared", len(stale_keys))
+        keys = [
+            r.app_key
+            for r in rows
+            if r.app_key not in self._icons and r.app_key not in self._icon_failed
+        ]
         logger.info("Icon pass started: %d new keys to resolve", len(keys))
         found: dict[str, bytes] = {}
         for row in rows:
@@ -428,7 +443,7 @@ class TopAppsCard(CardSection):
             if png is not None:
                 found[key] = png
             else:
-                self._icon_failed.add(key)
+                self._icon_failed[key] = now
         logger.info(
             "Icon pass done: %d resolved, %d failed, %d cached",
             len(found),
@@ -510,15 +525,15 @@ class TopAppsCard(CardSection):
         # Try session payload first
         try:
             store = self._lazy_store()
-            sessions = store._storage.get_app_sessions(
-                app_key=app_key, limit=1
-            )
+            sessions = store._storage.get_app_sessions(app_key=app_key, limit=1)
             for session in sessions:
                 exe_path = session.get("payload", {}).get("exe_path")
                 if exe_path:
                     return exe_path
         except Exception:
-            logger.debug("Session exe_path lookup failed for %s", app_key, exc_info=True)
+            logger.debug(
+                "Session exe_path lookup failed for %s", app_key, exc_info=True
+            )
 
         # Lazy psutil lookup (may fail for dead processes)
         try:

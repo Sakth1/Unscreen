@@ -79,9 +79,7 @@ class IconCache:
         try:
             self._conn.execute("DELETE FROM app_icons WHERE app_key = ?", (app_key,))
         except Exception:
-            logger.debug(
-                "IconCache.invalidate failed for %s", app_key, exc_info=True
-            )
+            logger.debug("IconCache.invalidate failed for %s", app_key, exc_info=True)
 
     def evict_expired(self, max_age_days: int = 30) -> int:
         """Remove entries older than *max_age_days*. Returns count evicted."""

@@ -99,15 +99,39 @@ def _hostile_png_bytes(rng) -> list[bytes]:
         b"\x89PNG\r\n\x1a\n" + b"IHDR" + b"\x00" * 100,
         b"\x89PNG\r\n\x1a\n" + b"IEND" + b"\x00" * 8,
     ]
-    return pool + [bytes(rng.randint(0, 255) for _ in range(rng.randint(0, 500))) for _ in range(8)]
+    return pool + [
+        bytes(rng.randint(0, 255) for _ in range(rng.randint(0, 500))) for _ in range(8)
+    ]
 
 
 def _hostile_ints(rng) -> list[int]:
     """Sizes, timestamps, and other integer values."""
     return [
-        0, -1, -100, 1, 2, 3, 4, 8, 16, 32, 48, 64, 96, 128, 256, 512, 1024,
-        2**31 - 1, 2**31, 2**32 - 1, 2**32, 2**63 - 1, 2**63,
-        -2**31, -2**63,
+        0,
+        -1,
+        -100,
+        1,
+        2,
+        3,
+        4,
+        8,
+        16,
+        32,
+        48,
+        64,
+        96,
+        128,
+        256,
+        512,
+        1024,
+        2**31 - 1,
+        2**31,
+        2**32 - 1,
+        2**32,
+        2**63 - 1,
+        2**63,
+        -(2**31),
+        -(2**63),
         rng.randint(-1000, 1000),
         rng.randint(0, 2**32),
     ]
@@ -186,7 +210,12 @@ class TestPngFromRgbaChaos:
         for width in _hostile_ints(run.rng):
             for height in _hostile_ints(run.rng)[:5]:  # limit combinations
                 try:
-                    if abs(width) > 4096 or abs(height) > 4096 or width <= 0 or height <= 0:
+                    if (
+                        abs(width) > 4096
+                        or abs(height) > 4096
+                        or width <= 0
+                        or height <= 0
+                    ):
                         result = _png_from_rgba(b"", width, height)
                         assert isinstance(result, bytes)
                     else:
@@ -247,16 +276,14 @@ class TestIconCacheChaos:
 
     def _make_cache(self, tmp_path) -> IconCache:
         db = sqlite3.connect(str(tmp_path / "chaos.db"))
-        db.execute(
-            """CREATE TABLE IF NOT EXISTS app_icons (
+        db.execute("""CREATE TABLE IF NOT EXISTS app_icons (
                 app_key     TEXT PRIMARY KEY,
                 source      TEXT NOT NULL,
                 fingerprint TEXT NOT NULL,
                 png         BLOB NOT NULL,
                 width       INTEGER NOT NULL,
                 updated_at  INTEGER NOT NULL
-            )"""
-        )
+            )""")
         return IconCache(db)
 
     def test_hostile_keys_get_put_invalidate(self, tmp_path):
@@ -303,7 +330,14 @@ class TestIconCacheChaos:
                 db = cache._conn
                 db.execute(
                     "INSERT OR REPLACE INTO app_icons VALUES (?, ?, ?, ?, ?, ?)",
-                    (f"test.{age}", "site_fingerprint", "fp", png, 48, now_ms - age * 1000),
+                    (
+                        f"test.{age}",
+                        "site_fingerprint",
+                        "fp",
+                        png,
+                        48,
+                        now_ms - age * 1000,
+                    ),
                 )
                 evicted = cache.evict_expired(max_age_days=max(0, age))
                 assert isinstance(evicted, int)
@@ -323,16 +357,14 @@ class TestIconCacheChaos:
 
         def hammer(base: int) -> None:
             db = sqlite3.connect(db_path)
-            db.execute(
-                """CREATE TABLE IF NOT EXISTS app_icons (
+            db.execute("""CREATE TABLE IF NOT EXISTS app_icons (
                     app_key     TEXT PRIMARY KEY,
                     source      TEXT NOT NULL,
                     fingerprint TEXT NOT NULL,
                     png         BLOB NOT NULL,
                     width       INTEGER NOT NULL,
                     updated_at  INTEGER NOT NULL
-                )"""
-            )
+                )""")
             cache = IconCache(db)
             for i in range(100):
                 try:
@@ -368,9 +400,26 @@ class TestFetchFaviconsConfigChaos:
     def test_hostile_values_for_fetch_favicons(self, tmp_path):
         run = ChaosRun()
         hostile_values = [
-            None, 0, 1, -1, 42, 3.14, "", "true", "false", "yes", "no",
-            [], {}, set(), b"true", object(), object(), float("nan"),
-            float("inf"), float("-inf"),
+            None,
+            0,
+            1,
+            -1,
+            42,
+            3.14,
+            "",
+            "true",
+            "false",
+            "yes",
+            "no",
+            [],
+            {},
+            set(),
+            b"true",
+            object(),
+            object(),
+            float("nan"),
+            float("inf"),
+            float("-inf"),
         ]
         for val in hostile_values:
             try:
@@ -379,7 +428,9 @@ class TestFetchFaviconsConfigChaos:
                 cm._data["fetch_favicons"] = val
                 # The property should still return a bool
                 result = cm.fetch_favicons
-                assert isinstance(result, bool), f"fetch_favicons returned {type(result)} for {val!r}"
+                assert isinstance(
+                    result, bool
+                ), f"fetch_favicons returned {type(result)} for {val!r}"
             except BaseException as exc:
                 if isinstance(exc, (KeyboardInterrupt, SystemExit)):
                     raise

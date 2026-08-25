@@ -72,10 +72,20 @@ def package_icon_png(package: str, size: int = 96) -> bytes | None:
     the caller can fall back to colored-initial avatars.
     """
     try:
+        import threading
+
         from utils.android import get_activity
 
+        logger.info(
+            "package_icon_png: thread=%s package=%s",
+            threading.current_thread().name,
+            package,
+        )
         activity = get_activity()
         if activity is None:
+            logger.warning(
+                "package_icon_png: get_activity() returned None for %s", package
+            )
             return None
 
         from jnius import autoclass  # type: ignore
@@ -92,9 +102,11 @@ def package_icon_png(package: str, size: int = 96) -> bytes | None:
         icon.draw(canvas)
         out = ByteArrayOutputStream()
         bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-        return bytes(out.toByteArray())
+        png = bytes(out.toByteArray())
+        logger.info("package_icon_png: resolved %s (%d bytes)", package, len(png))
+        return png
     except Exception:
-        logger.debug("package_icon_png failed for %s", package, exc_info=True)
+        logger.warning("package_icon_png failed for %s", package, exc_info=True)
         return None
 
 
@@ -164,9 +176,10 @@ def exe_icon_png(exe_path: str, size: int = 48) -> bytes | None:
         _icon_gdi32.DeleteObject(hbmp)
         _icon_gdi32.DeleteDC(hdc)
         _icon_user32.DestroyIcon(hicon)
+        logger.info("exe_icon_png: resolved %s (%d bytes)", exe_path, len(png))
         return png
     except Exception:
-        logger.debug("exe_icon_png failed for %s", exe_path, exc_info=True)
+        logger.warning("exe_icon_png failed for %s", exe_path, exc_info=True)
         return None
 
 
@@ -188,6 +201,7 @@ def _extract_icon_handle(exe_path: str):
 
     # Fallback: SHGetFileInfoW
     try:
+
         class SHFILEINFOW(ctypes.Structure):
             _fields_ = [
                 ("hIcon", wintypes.HANDLE),
@@ -257,7 +271,9 @@ def fetch_site_favicon(app_key: str) -> bytes | None:
         return data if _valid_png(data) else None
     if data.startswith(b"\x00\x00\x01\x00"):
         return ico_to_png(data)
-    logger.debug("favicon response not PNG/ICO for %s (starts with %r)", domain, data[:4])
+    logger.debug(
+        "favicon response not PNG/ICO for %s (starts with %r)", domain, data[:4]
+    )
     return None
 
 

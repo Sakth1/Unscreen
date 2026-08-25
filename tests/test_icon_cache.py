@@ -9,16 +9,14 @@ from core.icons.icon_cache import IconCache
 def _make_cache(tmp_path) -> tuple[IconCache, sqlite3.Connection]:
     """Create an in-memory-ish cache backed by a temp file DB."""
     db = sqlite3.connect(str(tmp_path / "test.db"))
-    db.execute(
-        """CREATE TABLE IF NOT EXISTS app_icons (
+    db.execute("""CREATE TABLE IF NOT EXISTS app_icons (
             app_key     TEXT PRIMARY KEY,
             source      TEXT NOT NULL,
             fingerprint TEXT NOT NULL,
             png         BLOB NOT NULL,
             width       INTEGER NOT NULL,
             updated_at  INTEGER NOT NULL
-        )"""
-    )
+        )""")
     return IconCache(db), db
 
 
@@ -60,7 +58,9 @@ class TestIconCachePut:
         cache, db = _make_cache(tmp_path)
         png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 20
         cache.put("com.test.app", "android_package", "pkg", png, 96)
-        row = db.execute("SELECT * FROM app_icons WHERE app_key = ?", ("com.test.app",)).fetchone()
+        row = db.execute(
+            "SELECT * FROM app_icons WHERE app_key = ?", ("com.test.app",)
+        ).fetchone()
         assert row is not None
         assert row[1] == "android_package"
         assert row[2] == "pkg"
@@ -73,7 +73,9 @@ class TestIconCachePut:
         png2 = b"\x89PNG\r\n\x1a\n" + b"\x01" * 20
         cache.put("com.test.app", "android_package", "v1", png1, 96)
         cache.put("com.test.app", "android_package", "v2", png2, 128)
-        rows = db.execute("SELECT * FROM app_icons WHERE app_key = ?", ("com.test.app",)).fetchall()
+        rows = db.execute(
+            "SELECT * FROM app_icons WHERE app_key = ?", ("com.test.app",)
+        ).fetchall()
         assert len(rows) == 1
         assert rows[0][2] == "v2"
         assert rows[0][3] == png2
