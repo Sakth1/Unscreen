@@ -471,9 +471,7 @@ class TestExeIconPng:
         result = exe_icon_png("/usr/bin/ls")
         assert result is None
 
-    @pytest.mark.skipif(
-        sys.platform != "win32", reason="Windows-specific GDI tests"
-    )
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific GDI tests")
     def test_returns_valid_png_on_windows(self):
         """On Windows, exe_icon_png returns valid PNG bytes."""
         result = exe_icon_png("C:\\nonexistent\\fake.exe")
@@ -482,9 +480,7 @@ class TestExeIconPng:
         if result is not None:
             assert result.startswith(b"\x89PNG")
 
-    @pytest.mark.skipif(
-        sys.platform != "win32", reason="Windows-specific GDI tests"
-    )
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific GDI tests")
     def test_empty_path_returns_png_or_none(self):
         """Empty path on Windows returns either valid PNG or None."""
         result = exe_icon_png("")
