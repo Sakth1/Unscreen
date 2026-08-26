@@ -1,10 +1,9 @@
 """Collection status bar — live, at-a-glance verification of data collection.
 
 A slim strip at the bottom of the app shell showing the collection state
-(collecting / paused / auto-paused), per-watcher health (last tick time,
-failure count) and the number of events stored today. Zero-arg-safe
-construction per the lifecycle sweep: no page or storage access until
-:meth:`start_refresh` is called by the app shell.
+(collecting / paused / auto-paused). On desktop, per-watcher health and
+event counts are also shown; on Android the bar is compact (dot + label
+only) to reclaim vertical space and avoid unnecessary disk I/O.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from core.state.app_state import (
     KEY_WATCHER_HEALTH,
     get_app_state,
 )
+from utils.platform import OSType, detect_os
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,7 @@ _STATE_LABELS = {
 }
 
 _DOT_SIZE = 8.0
+_IS_ANDROID = detect_os() == OSType.ANDROID
 
 
 class CollectionStatusBar(ft.Container):
@@ -52,8 +53,9 @@ class CollectionStatusBar(ft.Container):
         page: ft.Page | None = None,
         refresh_s: float = 15.0,
     ):
+        pad_v = 4 if _IS_ANDROID else 6
         super().__init__(
-            padding=ft.padding.Padding(left=12, top=6, right=12, bottom=6),
+            padding=ft.padding.Padding(left=12, top=pad_v, right=12, bottom=pad_v),
             bgcolor=ft.Colors.SURFACE_CONTAINER_HIGHEST,
             border=ft.Border(
                 top=ft.BorderSide(width=1, color=ft.Colors.OUTLINE_VARIANT)
@@ -70,23 +72,21 @@ class CollectionStatusBar(ft.Container):
         self._count_text = ft.Text(size=12, color=ft.Colors.ON_SURFACE_VARIANT)
         self._version_text = ft.Text(size=11, color=ft.Colors.ON_SURFACE_VARIANT)
 
+        self._state_row = ft.Row(
+            spacing=6,
+            controls=[self._dot, self._state_text],
+        )
+        self._watcher_row = ft.Row(
+            spacing=10,
+            wrap=True,
+            controls=self._watcher_chips,
+            expand=True,
+        )
+
         self.content = ft.Row(
             spacing=16,
             vertical_alignment=ft.CrossAxisAlignment.CENTER,
-            controls=[
-                ft.Row(
-                    spacing=6,
-                    controls=[self._dot, self._state_text],
-                ),
-                ft.Row(
-                    spacing=10,
-                    wrap=True,
-                    controls=self._watcher_chips,
-                    expand=True,
-                ),
-                self._count_text,
-                self._version_text,
-            ],
+            controls=self._build_controls(),
         )
 
         for key in (
@@ -99,7 +99,13 @@ class CollectionStatusBar(ft.Container):
 
         self._refresh()
 
-    # ── App shell wiring ────────────────────────────────────────────────────
+    def _build_controls(self) -> list[ft.Control]:
+        controls: list[ft.Control] = [self._state_row]
+        if not _IS_ANDROID:
+            controls.extend([self._watcher_row, self._count_text, self._version_text])
+        return controls
+
+    # -- App shell wiring --
 
     def start_refresh(self, page: ft.Page) -> None:
         """Attach the live event-count refresh loop (called once at boot)."""
@@ -109,7 +115,7 @@ class CollectionStatusBar(ft.Container):
         except Exception:
             logger.exception("Failed to start status bar refresh loop")
 
-    # ── State ───────────────────────────────────────────────────────────────
+    # -- State --
 
     def _collection_state(self) -> str:
         state = get_app_state()
@@ -156,16 +162,19 @@ class CollectionStatusBar(ft.Container):
         self._state_text.value = _STATE_LABELS[state_key]
         self._state_text.color = _STATE_COLORS[state_key]
 
-        self._watcher_chips.clear()
-        for label, color in self._watcher_parts():
-            self._watcher_chips.append(
-                ft.Text(label, size=11, weight=ft.FontWeight.W_500, color=color)
-            )
+        if not _IS_ANDROID:
+            self._watcher_chips.clear()
+            for label, color in self._watcher_parts():
+                self._watcher_chips.append(
+                    ft.Text(label, size=11, weight=ft.FontWeight.W_500, color=color)
+                )
+            self._version_text.value = f"v{get_app_state().app_version}"
 
-        self._version_text.value = f"v{get_app_state().app_version}"
         self._safe_update()
 
     def _refresh_count(self) -> None:
+        if _IS_ANDROID:
+            return
         if self._storage is None:
             try:
                 from core.storage import Storage

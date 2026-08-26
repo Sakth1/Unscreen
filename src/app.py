@@ -57,6 +57,8 @@ from utils.platform import OSType, detect_os, is_packaged
 from utils.versions import get_current_version
 from utils.win32 import acquire_instance_mutex
 
+_NAV_BAR_HEIGHT = 64  # fixed height for floating nav bar (px)
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -384,6 +386,12 @@ class App:
         self.status_bar = CollectionStatusBar()
         self.shell = ft.Row(expand=True, controls=[self.content_container])
 
+        self._content_column = ft.Column(
+            expand=True, spacing=0, controls=[self.shell, self.status_bar]
+        )
+        self._nav_bar_stack = ft.Stack(expand=True, controls=[self._content_column])
+        self._floating_nav_bar = None
+
         self.section_routes: dict[str, list[str]] = {
             "/settings": ["/settings/general", "/settings/data", "/settings/app-info"],
         }
@@ -432,9 +440,7 @@ class App:
         self.page.on_media_change = self._handle_media_change
         # Root of the mounted control tree; kept so a post-update relaunch
         # can force a full rebuild (see _post_update_refresh).
-        self._root_control = ft.Column(
-            expand=True, spacing=0, controls=[self.shell, self.status_bar]
-        )
+        self._root_control = self._nav_bar_stack
         _write_startup_log("calling page.add()")
         logger.info("Calling page.add() to mount UI...")
         self.page.add(self._root_control)
@@ -780,7 +786,7 @@ class App:
                 self.shell.controls = [self.content_container]
 
             case NavigationPattern.MINI_RAIL:
-                self.page.navigation_bar = None
+                self._remove_floating_nav_bar()
                 self._ensure_rail(extended=False).apply_layout(self.layout)
                 self._build_secondary_options(self.layout)
 
@@ -788,7 +794,7 @@ class App:
                 self._append_secondary_panel()
 
             case NavigationPattern.EXTENDED_RAIL:
-                self.page.navigation_bar = None
+                self._remove_floating_nav_bar()
                 self._ensure_rail(extended=True).apply_layout(self.layout)
                 self._build_secondary_options(self.layout)
 
@@ -800,6 +806,19 @@ class App:
 
         self._apply_content_padding(self.layout)
         self.page.update()
+
+    def _remove_floating_nav_bar(self) -> None:
+        """Remove the floating nav bar from the Stack overlay."""
+        if self._floating_nav_bar is None:
+            return
+        for i, ctrl in enumerate(self._nav_bar_stack.controls):
+            if (
+                isinstance(ctrl, ft.Positioned)
+                and ctrl.content is self._floating_nav_bar
+            ):
+                self._nav_bar_stack.controls.pop(i)
+                break
+        self._floating_nav_bar = None
 
     def _append_secondary_panel(self) -> None:
         """Place the secondary side panel in the shell when it applies.
@@ -988,27 +1007,30 @@ class App:
     def _apply_content_padding(self, layout: AppLayout) -> None:
         """Pad the content area with design spacing plus system safe insets.
 
-        The floating bottom bar already clears the gesture area on its own,
-        so with a bottom bar the content does not need the extra bottom inset.
+        When the floating bottom bar is present, add bottom padding for
+        the bar height so content is not hidden behind it.
         """
         base = layout.padding
         safe_left, safe_top, safe_right, safe_bottom = layout.safe_padding
         bottom_bar = layout.navigation is NavigationPattern.BOTTOM_BAR
-        self.content_container.padding = ft.padding.Padding.only(
+        bottom_inset = safe_bottom
+        if bottom_bar:
+            bottom_inset += _NAV_BAR_HEIGHT + layout.nav_bar_metrics.margin_bottom
+        self.content_container.padding = ft.padding.Padding(
             left=base + safe_left,
             top=base + safe_top,
             right=base + safe_right,
-            bottom=base + (0.0 if bottom_bar else safe_bottom),
+            bottom=base + bottom_inset,
         )
 
     def _ensure_navigation_bar(self):
-        if self.page.navigation_bar is not None:
-            return self.page.navigation_bar
+        if self._floating_nav_bar is not None:
+            return self._floating_nav_bar
 
         selected_index = self.route_manager._index_for_route(
             self.route_manager.current_route
         )
-        self.page.navigation_bar = CustomNavigationBar(
+        self._floating_nav_bar = CustomNavigationBar(
             destinations=[
                 CustomNavigationBarDestination(
                     icon=dest.icon,
@@ -1022,7 +1044,16 @@ class App:
             label_behavior=ft.NavigationBarLabelBehavior.ONLY_SHOW_SELECTED,
             on_change=self._handle_navigation_change,
         )
-        return self.page.navigation_bar
+        self._floating_nav_bar.apply_layout(self.layout)
+        self._nav_bar_stack.controls.append(
+            ft.Positioned(
+                bottom=0,
+                left=0,
+                right=0,
+                content=self._floating_nav_bar,
+            )
+        )
+        return self._floating_nav_bar
 
     def _ensure_rail(self, extended: bool) -> CustomNavigationDrawer:
         if self.navigation_rail is not None:
