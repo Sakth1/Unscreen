@@ -246,9 +246,9 @@ class TestAppNameResolution:
             in_memory_db, "chrome.exe", {"app": "chrome.exe"}, now, now + 1000, 1.0
         )
         total = AnalyticsStore(in_memory_db).daily_totals()[0]
-        # F8: an unrecognized browser session rolls into the general bucket.
-        assert total.app_name == "Browser"
-        assert total.app_key == "browser"
+        # F8: an unrecognized browser session uses the browser name.
+        assert total.app_name == "Chrome"
+        assert total.app_key == "browser:chrome.exe"
 
     def test_windows_generic_exe_stripped(self, in_memory_db):
         now = day_start_ms(get_current_time_ms())
@@ -323,7 +323,7 @@ class TestSystemAppFilter:
             60.0,
         )
         totals = AnalyticsStore(in_memory_db).daily_totals()
-        assert [t.app_key for t in totals] == ["browser"]
+        assert [t.app_key for t in totals] == ["browser:chrome.exe"]
 
     def test_share_recomputed_over_visible_apps(self, in_memory_db):
         now = day_start_ms(get_current_time_ms())
@@ -399,7 +399,7 @@ class TestBrowserSiteBucketing:
         assert [(t.app_name, t.total_s) for t in totals] == [
             ("YouTube", 60.0),
             ("GitHub", 30.0),
-            ("Browser", 10.0),
+            ("Brave", 10.0),
         ]
         assert totals[0].share_pct == 60.0
         assert totals[1].share_pct == 30.0
@@ -424,7 +424,7 @@ class TestBrowserSiteBucketing:
         )
         self._seed_browser(in_memory_db, "brave.exe", "New Tab", now + 2_000, 5.0)
         totals = AnalyticsStore(in_memory_db).daily_totals()
-        assert [(t.app_name, t.total_s) for t in totals] == [("Browser", 55.0)]
+        assert [(t.app_name, t.total_s) for t in totals] == [("Brave", 55.0)]
 
     def test_browser_without_title_buckets_to_browser(self, in_memory_db):
         now = day_start_ms(get_current_time_ms())
@@ -432,7 +432,7 @@ class TestBrowserSiteBucketing:
             in_memory_db, "firefox.exe", {"app": "firefox.exe"}, now, now + 1_000, 1.0
         )
         totals = AnalyticsStore(in_memory_db).daily_totals()
-        assert totals[0].app_name == "Browser"
+        assert totals[0].app_name == "Firefox"
 
     def test_limit_applied_after_bucketing(self, in_memory_db):
         now = day_start_ms(get_current_time_ms())

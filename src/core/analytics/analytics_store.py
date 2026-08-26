@@ -94,15 +94,17 @@ def _display_bucket(app_key: str, payload: dict | None) -> tuple[str, str]:
     """(bucket key, display name) for one app-session group.
 
     Browser sessions split by their normalized site (YouTube, GitHub, ...)
-    so known sites get their own entry; unrecognized browsing merges into
-    a single general "Browser" entry. Other apps bucket by app key with
-    the resolved display name.
+    so known sites get their own entry; unrecognized browsing is grouped
+    by browser identity (Brave, Chrome, ...) instead of a generic catch-all.
+    Other apps bucket by app key with the resolved display name.
     """
     if _is_browser_session(app_key, payload):
         site = _browser_site(payload)
         if site:
             return f"browser:{site.lower()}", site
-        return "browser", "Browser"
+        candidate = (payload or {}).get("app") or app_key
+        browser_name = BROWSER_PROCESSES.get(candidate.lower(), "Browser")
+        return f"browser:{candidate.lower()}", browser_name
     return app_key, _app_name(app_key, payload)
 
 

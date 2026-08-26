@@ -234,6 +234,7 @@ def _build_rows(
     icons = icons or {}
     return ft.Column(
         spacing=4,
+        expand=True,
         scroll=ft.ScrollMode.AUTO,
         controls=[
             _app_row(row, rank, icons.get(row.app_key)) for rank, row in enumerate(rows)
@@ -261,6 +262,7 @@ def _all_apps_dialog(
     total_s = sum(row.total_s for row in rows)
     body = ft.Column(
         spacing=4,
+        expand=True,
         scroll=ft.ScrollMode.AUTO,
         controls=[
             _app_row(row, rank, icons.get(row.app_key) if icons else None)
@@ -275,6 +277,7 @@ def _all_apps_dialog(
             height=_ALL_APPS_DIALOG_HEIGHT,
             padding=ft.padding.Padding.only(top=4),
             content=ft.Column(
+                expand=True,
                 spacing=8,
                 controls=[
                     ft.Text(
@@ -354,7 +357,8 @@ class TopAppsCard(CardSection):
         """
         self._rows = rows
         column = _build_rows(rows, icons=self._icons)
-        return ft.Container(height=_TOP_APPS_MAX_HEIGHT, content=column)
+        height = _TOP_APPS_MAX_HEIGHT if len(rows) > _DEFAULT_LIMIT else None
+        return ft.Container(height=height, content=column)
 
     def _current_page(self) -> ft.Page | None:
         """The owning page, or None while the card is detached."""
@@ -494,6 +498,23 @@ class TopAppsCard(CardSection):
                 return png
             logger.info("Icon site bucket but fetch_favicons disabled: %s", app_key)
             return None
+
+        # 2b. Browser key that wasn't a recognized site -> resolve browser shell icon
+        if app_key.startswith("browser:"):
+            exe_name = app_key[len("browser:") :]
+            if detect_os() == OSType.WINDOWS and exe_name.endswith(".exe"):
+                exe_path = self._lazy_resolve_exe_path(exe_name)
+                if exe_path is not None:
+                    logger.info(
+                        "Icon windows exe (browser): %s -> %s", app_key, exe_path
+                    )
+                    png = exe_icon_png(exe_path)
+                    if png is not None and cache is not None:
+                        import hashlib
+
+                        fp = hashlib.sha256(exe_name.encode()).hexdigest()
+                        cache.put(app_key, "windows_exe", fp, png, 48)
+                    return png
 
         # 3. Android package icon (local, no network)
         if detect_os() == OSType.ANDROID:
