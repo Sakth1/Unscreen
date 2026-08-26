@@ -812,10 +812,7 @@ class App:
         if self._floating_nav_bar is None:
             return
         for i, ctrl in enumerate(self._nav_bar_stack.controls):
-            if (
-                isinstance(ctrl, ft.Container)
-                and ctrl.content is self._floating_nav_bar
-            ):
+            if ctrl is self._floating_nav_bar:
                 self._nav_bar_stack.controls.pop(i)
                 break
         self._floating_nav_bar = None
@@ -1045,13 +1042,10 @@ class App:
             on_change=self._handle_navigation_change,
         )
         self._floating_nav_bar.apply_layout(self.layout)
-        self._nav_bar_stack.controls.append(
-            ft.Container(
-                content=self._floating_nav_bar,
-                alignment=ft.alignment.bottom_center,
-                expand=True,
-            )
-        )
+        self._floating_nav_bar.bottom = 0
+        self._floating_nav_bar.left = 0
+        self._floating_nav_bar.right = 0
+        self._nav_bar_stack.controls.append(self._floating_nav_bar)
         return self._floating_nav_bar
 
     def _ensure_rail(self, extended: bool) -> CustomNavigationDrawer:
