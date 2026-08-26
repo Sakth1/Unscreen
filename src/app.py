@@ -813,7 +813,7 @@ class App:
             return
         for i, ctrl in enumerate(self._nav_bar_stack.controls):
             if (
-                isinstance(ctrl, ft.Positioned)
+                isinstance(ctrl, ft.Container)
                 and ctrl.content is self._floating_nav_bar
             ):
                 self._nav_bar_stack.controls.pop(i)
@@ -1046,11 +1046,10 @@ class App:
         )
         self._floating_nav_bar.apply_layout(self.layout)
         self._nav_bar_stack.controls.append(
-            ft.Positioned(
-                bottom=0,
-                left=0,
-                right=0,
+            ft.Container(
                 content=self._floating_nav_bar,
+                alignment=ft.alignment.bottom_center,
+                expand=True,
             )
         )
         return self._floating_nav_bar
