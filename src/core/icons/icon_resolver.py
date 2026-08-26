@@ -91,17 +91,19 @@ def package_icon_png(package: str, size: int = 96) -> bytes | None:
         from jnius import autoclass  # type: ignore
 
         Bitmap = autoclass("android.graphics.Bitmap")
+        BitmapConfig = autoclass("android.graphics.Bitmap$Config")
+        BitmapCompressFormat = autoclass("android.graphics.Bitmap$CompressFormat")
         Canvas = autoclass("android.graphics.Canvas")
         ByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
 
         pm = activity.getPackageManager()
         icon = pm.getApplicationIcon(package)
-        bmp = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        bmp = Bitmap.createBitmap(size, size, BitmapConfig.ARGB_8888)
         canvas = Canvas(bmp)
         icon.setBounds(0, 0, size, size)
         icon.draw(canvas)
         out = ByteArrayOutputStream()
-        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+        bmp.compress(BitmapCompressFormat.PNG, 100, out)
         png = bytes(out.toByteArray())
         logger.info("package_icon_png: resolved %s (%d bytes)", package, len(png))
         return png

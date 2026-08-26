@@ -256,12 +256,11 @@ class TestSiteIconWiring:
         assert "browser" not in card._icons
         # The section re-ran (a second store call) and re-rendered content.
         assert store.calls.count(("daily", None, card._limit)) == 2
-        assert isinstance(card._section.controls[0], ft.Column)
-        avatars = [
-            c
-            for c in _walk(card._section.controls[0])
-            if isinstance(c, ft.CircleAvatar)
-        ]
+        container = card._section.controls[0]
+        assert isinstance(container, ft.Container)
+        column = container.content
+        assert isinstance(column, ft.Column)
+        avatars = [c for c in _walk(column) if isinstance(c, ft.CircleAvatar)]
         assert avatars[0].foreground_image_src == fake_png
         assert avatars[1].foreground_image_src is None
 

@@ -224,6 +224,9 @@ def _app_row(
     )
 
 
+_TOP_APPS_MAX_HEIGHT = 300  # pixels; scrolls when more rows than this
+
+
 def _build_rows(
     rows: list[AppTotal],
     icons: dict[str, bytes] | None = None,
@@ -231,6 +234,7 @@ def _build_rows(
     icons = icons or {}
     return ft.Column(
         spacing=4,
+        scroll=ft.ScrollMode.AUTO,
         controls=[
             _app_row(row, rank, icons.get(row.app_key)) for rank, row in enumerate(rows)
         ],
@@ -349,7 +353,8 @@ class TopAppsCard(CardSection):
         section in place with the latest resolved favicons.
         """
         self._rows = rows
-        return _build_rows(rows, icons=self._icons)
+        column = _build_rows(rows, icons=self._icons)
+        return ft.Container(height=_TOP_APPS_MAX_HEIGHT, content=column)
 
     def _current_page(self) -> ft.Page | None:
         """The owning page, or None while the card is detached."""
@@ -433,6 +438,7 @@ class TopAppsCard(CardSection):
             for r in rows
             if r.app_key not in self._icons and r.app_key not in self._icon_failed
         ]
+        cached_before = len(self._icons)
         logger.info("Icon pass started: %d new keys to resolve", len(keys))
         found: dict[str, bytes] = {}
         for row in rows:
@@ -448,7 +454,7 @@ class TopAppsCard(CardSection):
             "Icon pass done: %d resolved, %d failed, %d cached",
             len(found),
             len(keys) - len(found),
-            len(self._icons) - len(found),
+            cached_before,
         )
         if not found:
             return
