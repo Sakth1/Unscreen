@@ -12,7 +12,6 @@
   "reportArgumentType": false,
   "reportAttributeAccessIssue": false,
   "reportAssignmentType": false,
-  "reportCallIssue": false,
   "pythonVersion": "3.12",
   "pythonPlatform": "All",
   "ignore": [
